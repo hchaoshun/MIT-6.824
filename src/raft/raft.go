@@ -42,6 +42,11 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+type LogEntry struct {
+	Command 	interface{}
+	Term 		int
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -54,7 +59,17 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	//todo use enum
+	state 			int
+	currentTerm		int
+	votedFor 		int
+	log 			[]LogEntry
 
+	commitIndex		int
+	lastApplied		int
+
+	nextIndex		[]int
+	matchIndex		[]int
 }
 
 // return currentTerm and whether this server
@@ -64,6 +79,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = rf.state == 0
 	return term, isleader
 }
 
@@ -116,6 +133,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term			int
+	CandidateId		int
+	LastLogIndex	int
+	LastLogTerm		int
 }
 
 //
@@ -124,6 +145,22 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term 			int
+	VoteGranted		bool
+}
+
+type AppendEntriesArgs struct {
+	Term 			int
+	LeaderId		int
+	PrevLogIndex	int
+	PrevLogTerm		int
+	entries 		[]LogEntry
+	LeaderCommit	int
+}
+
+type AppendEntriesReply struct {
+	Term 			int
+	Success			bool
 }
 
 //
@@ -131,6 +168,10 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
 }
 
 //
@@ -164,6 +205,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
