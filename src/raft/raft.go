@@ -43,6 +43,7 @@ type ApplyMsg struct {
 }
 
 type LogEntry struct {
+	LogIndex	int
 	Command 	interface{}
 	Term 		int
 }
@@ -59,9 +60,11 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	currentLeader 	int
 	//todo use enum
 	state 			int
 	currentTerm		int
+	lastLogIndex	int
 	votedFor 		int
 	log 			[]LogEntry
 
@@ -70,6 +73,7 @@ type Raft struct {
 
 	nextIndex		[]int
 	matchIndex		[]int
+	notifyApplyMsg	chan struct{}
 }
 
 // return currentTerm and whether this server
@@ -168,6 +172,23 @@ type AppendEntriesReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
+	//if args.Term < rf.currentTerm {
+	//	reply.Term = rf.currentTerm
+	//	reply.VoteGranted = false
+	//}
+	//
+	//if args.LastLogTerm < rf.log[len(rf.log)-1].Term {
+	//	reply.Term = rf.currentTerm
+	//	reply.VoteGranted = false
+	//} else if args.LastLogTerm == rf.log[len(rf.log)-1].Term {
+	//	if args.LastLogIndex < len(rf.log) {
+	//		reply.Term = rf.currentTerm
+	//		reply.VoteGranted = false
+	//	}
+	//}
+	//rf.votedFor = args.CandidateId
+
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -249,6 +270,18 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+func (rf *Raft) apply(applyCh chan ApplyMsg) {
+	for {
+		<-rf.notifyApplyMsg
+		if rf.lastApplied < rf.commitIndex {
+			for _, entry := range rf.log[rf.lastApplied:rf.commitIndex] {
+				applyCh <- ApplyMsg{CommandValid: true, Command:entry.Command, CommandIndex:entry.LogIndex}
+			}
+			rf.lastApplied = rf.commitIndex
+		}
+	}
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -266,11 +299,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.currentLeader = -1
+	rf.lastLogIndex = -1
+	rf.votedFor = -1
+	rf.log = make([]LogEntry, 0)
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, 0)
+	rf.matchIndex = make([]int, 0)
 
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	//go apply() 等待applyMsg通知
+	//go follower 超时开始campaign
+	//campaign过程(see Rules for Servers: Candidates)
+	//once success, send AppendEntries RPC to all follower
+	go rf.apply(applyCh)
 
 
 	return rf
