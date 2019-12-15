@@ -17,7 +17,9 @@ package raft
 //   in the same server.
 //
 
-import "sync"
+import (
+	"sync"
+)
 import "labrpc"
 
 // import "bytes"
@@ -48,6 +50,13 @@ type LogEntry struct {
 	Term 		int
 }
 
+type serverState int
+const (
+	Follower serverState = iota
+	Candidate
+	Leader
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -61,10 +70,9 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	currentLeader 	int
-	//todo use enum
-	state 			int
+	state 			serverState
 	currentTerm		int
-	lastLogIndex	int
+	logIndex		int //last log index
 	votedFor 		int
 	log 			[]LogEntry
 
@@ -270,6 +278,63 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+func (rf *Raft) solicit(i int, args *RequestVoteArgs, replyCh chan RequestVoteReply) {
+	reply := RequestVoteReply{}
+	rf.peers[i].Call("Raft.RequestVote", args, &reply)
+	replyCh <- reply
+}
+
+func (rf *Raft) campaign() {
+	rf.mu.Lock()
+	if rf.state == Leader {
+		rf.mu.Unlock()
+		return
+	}
+
+	rf.state = Candidate
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+	//todo reset election timer
+
+	args := RequestVoteArgs{}
+	args.Term = rf.currentTerm
+	args.CandidateId = rf.me
+	args.LastLogIndex = rf.logIndex - 1
+	args.LastLogTerm = rf.log[args.LastLogIndex].Term
+
+	replyCh := make(chan RequestVoteReply, len(rf.peers) - 1)
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			go rf.solicit(i, &args, replyCh)
+		}
+	}
+
+	voteCount, majorityCount := 0, len(rf.peers)/2
+	for voteCount < majorityCount {
+		select {
+		//todo election timeout
+		case reply := <-replyCh:
+			if reply.VoteGranted {
+				voteCount += 1
+			} else {
+				rf.mu.Lock()
+				if reply.Term > rf.currentTerm {
+					//todo step down
+				}
+				rf.mu.Unlock()
+			}
+		}
+	}
+
+	rf.mu.Lock()
+	if rf.state == Candidate {
+		rf.state = Leader
+		//todo init nextIndex and matchIndex
+		//todo notofy each server
+	}
+	rf.mu.Unlock()
+}
+
 func (rf *Raft) apply(applyCh chan ApplyMsg) {
 	for {
 		<-rf.notifyApplyMsg
@@ -277,7 +342,9 @@ func (rf *Raft) apply(applyCh chan ApplyMsg) {
 			for _, entry := range rf.log[rf.lastApplied:rf.commitIndex] {
 				applyCh <- ApplyMsg{CommandValid: true, Command:entry.Command, CommandIndex:entry.LogIndex}
 			}
+			rf.mu.Lock()
 			rf.lastApplied = rf.commitIndex
+			rf.mu.Unlock()
 		}
 	}
 }
@@ -300,7 +367,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.currentLeader = -1
-	rf.lastLogIndex = -1
+	rf.logIndex = 1
 	rf.votedFor = -1
 	rf.log = make([]LogEntry, 0)
 	rf.commitIndex = 0
@@ -318,7 +385,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//campaign过程(see Rules for Servers: Candidates)
 	//once success, send AppendEntries RPC to all follower
 	go rf.apply(applyCh)
-
 
 	return rf
 }
