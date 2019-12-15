@@ -18,14 +18,17 @@ package raft
 //
 
 import (
+	"math/rand"
 	"sync"
+	"time"
 )
 import "labrpc"
 
 // import "bytes"
 // import "labgob"
 
-
+const broadcastTime = time.Duration(100 * time.Millisecond)
+const electionTimeout = time.Duration(1000 * time.Millisecond)
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -57,6 +60,12 @@ const (
 	Leader
 )
 
+type Err string
+const (
+	OK = 	"OK"
+	RPCFAIL =	"RPCFAIL"
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -82,6 +91,12 @@ type Raft struct {
 	nextIndex		[]int
 	matchIndex		[]int
 	notifyApplyMsg	chan struct{}
+	electionTimer	*time.Timer
+}
+
+func generateRandDuration(minDuration time.Duration) time.Duration {
+	extra := time.Duration(rand.Int63()) % minDuration
+	return time.Duration(minDuration + extra)
 }
 
 // return currentTerm and whether this server
@@ -94,6 +109,13 @@ func (rf *Raft) GetState() (int, bool) {
 	term = rf.currentTerm
 	isleader = rf.state == 0
 	return term, isleader
+}
+
+func (rf *Raft) resetElectionTimer(duration time.Duration) {
+	if !rf.electionTimer.Stop() {
+		<-rf.electionTimer.C
+	}
+	rf.electionTimer.Reset(duration)
 }
 
 
@@ -159,6 +181,8 @@ type RequestVoteReply struct {
 	// Your data here (2A).
 	Term 			int
 	VoteGranted		bool
+	Server 			int // which peer
+	Err 			Err
 }
 
 type AppendEntriesArgs struct {
@@ -280,8 +304,18 @@ func (rf *Raft) Kill() {
 
 func (rf *Raft) solicit(i int, args *RequestVoteArgs, replyCh chan RequestVoteReply) {
 	reply := RequestVoteReply{}
-	rf.peers[i].Call("Raft.RequestVote", args, &reply)
+	if rf.peers[i].Call("Raft.RequestVote", args, &reply) == false {
+		reply.Err = RPCFAIL
+		reply.Server = i
+	}
 	replyCh <- reply
+}
+
+func (rf *Raft) stepDown(term int) {
+	rf.currentTerm = term
+	rf.state = Follower
+	rf.votedFor = -1
+	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 }
 
 func (rf *Raft) campaign() {
@@ -294,13 +328,16 @@ func (rf *Raft) campaign() {
 	rf.state = Candidate
 	rf.currentTerm += 1
 	rf.votedFor = rf.me
-	//todo reset election timer
+	//generateRandDuration(electionTimeout) always greater than electionTimeout
+	rf.resetElectionTimer(generateRandDuration(electionTimeout))
+	timer := time.After(electionTimeout)
 
 	args := RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
 	args.LastLogTerm = rf.log[args.LastLogIndex].Term
+	rf.mu.Unlock()
 
 	replyCh := make(chan RequestVoteReply, len(rf.peers) - 1)
 	for i := 0; i < len(rf.peers); i++ {
@@ -312,14 +349,21 @@ func (rf *Raft) campaign() {
 	voteCount, majorityCount := 0, len(rf.peers)/2
 	for voteCount < majorityCount {
 		select {
-		//todo election timeout
+		case <-timer:
+			return
 		case reply := <-replyCh:
 			if reply.VoteGranted {
 				voteCount += 1
+			} else if reply.Err != OK {
+				// retry
+				go rf.solicit(reply.Server, &args, replyCh)
 			} else {
 				rf.mu.Lock()
+				//todo when term > currentTerm ?
 				if reply.Term > rf.currentTerm {
-					//todo step down
+					rf.stepDown(reply.Term)
+					rf.mu.Unlock()
+					return
 				}
 				rf.mu.Unlock()
 			}
@@ -374,17 +418,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
+	rf.electionTimer = time.NewTimer(generateRandDuration(electionTimeout))
 
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	//go apply() 等待applyMsg通知
-	//go follower 超时开始campaign
-	//campaign过程(see Rules for Servers: Candidates)
-	//once success, send AppendEntries RPC to all follower
 	go rf.apply(applyCh)
+	go func() {
+		for {
+			select {
+			case <-rf.electionTimer.C:
+				rf.campaign()
+			//todo return finally
+			}
+		}
+	}()
 
 	return rf
 }
