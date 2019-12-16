@@ -90,7 +90,7 @@ type Raft struct {
 
 	nextIndex		[]int
 	matchIndex		[]int
-	notifyApplyMsg	chan struct{}
+	notifyApplyMsg	chan struct{} //更新commitIndex时chan写入
 	electionTimer	*time.Timer
 }
 
@@ -187,7 +187,7 @@ type AppendEntriesArgs struct {
 	LeaderId		int
 	PrevLogIndex	int
 	PrevLogTerm		int
-	entries 		[]LogEntry
+	Entries 		[]LogEntry
 	LeaderCommit	int
 }
 
@@ -351,7 +351,66 @@ func (rf *Raft) replicate() {
 }
 
 func (rf *Raft) sendLogEntry(follower int) {
-	//todo
+	rf.mu.Lock()
+	if rf.state != Leader {
+		rf.mu.Unlock()
+		return
+	}
+
+	args := AppendEntriesArgs{}
+	args.Term = rf.currentTerm
+	args.LeaderId = rf.me
+	prevLogIndex := rf.nextIndex[follower] - 1
+	args.PrevLogIndex = prevLogIndex
+	args.PrevLogTerm = rf.log[prevLogIndex].Term
+	args.LeaderCommit = rf.commitIndex
+	if rf.logIndex > rf.nextIndex[follower] {
+		entries := rf.log[prevLogIndex+1:rf.logIndex]
+		args.Entries = entries
+	} else {
+		args.Entries = nil
+	}
+	rf.mu.Unlock()
+	var reply AppendEntriesReply
+	//不用理会失败情况，follower接收不到AppendEntries超时会发起选举
+	if rf.peers[follower].Call("Raft.AppendEntries", args, &reply) {
+		rf.mu.Lock()
+		if !reply.Success {
+			if reply.Term > rf.currentTerm {
+				rf.stepDown(reply.Term)
+			} else {
+				//todo how to handle inconsistency ?
+			}
+		} else {
+			entriesLen := 0
+			if args.Entries != nil {
+				entriesLen = len(args.Entries)
+			}
+			commitIndex := prevLogIndex + entriesLen
+			rf.nextIndex[follower] = commitIndex + 1
+			rf.matchIndex[follower] = commitIndex
+
+			if rf.canCommit(commitIndex) {
+				rf.commitIndex = commitIndex
+				rf.notifyApplyMsg <- struct{}{}
+			}
+		}
+		rf.mu.Unlock()
+	}
+}
+
+func (rf *Raft) canCommit(index int) bool {
+	if index < rf.logIndex && index > rf.commitIndex && rf.log[index].Term == rf.currentTerm {
+		majorities, count := len(rf.peers) / 2 + 1, 0
+		for i := 0; i < len(rf.peers); i++ {
+			if rf.matchIndex[i] >= index {
+				count += 1
+			}
+		}
+		return count >= majorities
+	} else {
+		return false
+	}
 }
 
 func (rf *Raft) campaign() {
@@ -456,6 +515,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
 	rf.electionTimer = time.NewTimer(generateRandDuration(electionTimeout))
+	rf.notifyApplyMsg = make(chan struct{})
 
 	// Your initialization code here (2A, 2B, 2C).
 
