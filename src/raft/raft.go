@@ -81,7 +81,7 @@ type Raft struct {
 	currentLeader 	int
 	state 			serverState
 	currentTerm		int
-	logIndex		int //last log index
+	logIndex		int //index of next log entry to be stored, initialized to 1
 	votedFor 		int
 	log 			[]LogEntry
 
@@ -103,12 +103,9 @@ func generateRandDuration(minDuration time.Duration) time.Duration {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	var term int
-	var isleader bool
-	// Your code here (2A).
-	term = rf.currentTerm
-	isleader = rf.state == 0
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.currentTerm, rf.state == Leader
 }
 
 func (rf *Raft) resetElectionTimer(duration time.Duration) {
@@ -302,7 +299,7 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
-func (rf *Raft) solicit(i int, args *RequestVoteArgs, replyCh chan RequestVoteReply) {
+func (rf *Raft) solicit(i int, args *RequestVoteArgs, replyCh chan<- RequestVoteReply) {
 	reply := RequestVoteReply{}
 	if rf.peers[i].Call("Raft.RequestVote", args, &reply) == false {
 		reply.Err = RPCFAIL
@@ -311,11 +308,50 @@ func (rf *Raft) solicit(i int, args *RequestVoteArgs, replyCh chan RequestVoteRe
 	replyCh <- reply
 }
 
+func (rf *Raft) reinitIndex() {
+	peersNum := len(rf.peers)
+	rf.nextIndex, rf.matchIndex = make([]int, peersNum), make([]int, peersNum)
+	for i := 0; i < peersNum; i++ {
+		rf.nextIndex[i] = rf.logIndex
+		rf.matchIndex[i] = 0
+	}
+}
+
 func (rf *Raft) stepDown(term int) {
 	rf.currentTerm = term
 	rf.state = Follower
 	rf.votedFor = -1
 	rf.resetElectionTimer(generateRandDuration(electionTimeout))
+}
+
+func (rf *Raft) tick() {
+	timer := time.NewTimer(broadcastTime)
+	for {
+		select {
+		//todo shutdown
+		case <-timer.C:
+			if _, isLeader := rf.GetState(); !isLeader {
+				return
+			}
+			go rf.replicate()
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(broadcastTime)
+		}
+	}
+}
+
+func (rf *Raft) replicate() {
+	for follower := 0; follower < len(rf.peers); follower++ {
+		if follower != rf.me {
+			go rf.sendLogEntry(follower)
+		}
+	}
+}
+
+func (rf *Raft) sendLogEntry(follower int) {
+	//todo
 }
 
 func (rf *Raft) campaign() {
@@ -361,6 +397,7 @@ func (rf *Raft) campaign() {
 				rf.mu.Lock()
 				//todo when term > currentTerm ?
 				if reply.Term > rf.currentTerm {
+					//发现term不是最新的，stepdown后停止竞选
 					rf.stepDown(reply.Term)
 					rf.mu.Unlock()
 					return
@@ -373,8 +410,8 @@ func (rf *Raft) campaign() {
 	rf.mu.Lock()
 	if rf.state == Candidate {
 		rf.state = Leader
-		//todo init nextIndex and matchIndex
-		//todo notofy each server
+		rf.reinitIndex()
+		rf.tick()
 	}
 	rf.mu.Unlock()
 }
