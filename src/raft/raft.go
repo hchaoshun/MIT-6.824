@@ -88,6 +88,7 @@ type Raft struct {
 	commitIndex		int
 	lastApplied		int
 
+	//每次选举成功nextIndex都重新初始化为logIndex，所以Leader的nextIndex总是>=follower的logIndex
 	nextIndex		[]int
 	matchIndex		[]int
 	notifyApplyMsg	chan struct{} //更新commitIndex时chan写入
@@ -115,7 +116,6 @@ func (rf *Raft) resetElectionTimer(duration time.Duration) {
 	rf.electionTimer.Reset(duration)
 }
 
-
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -131,7 +131,6 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -153,75 +152,6 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
-}
-
-
-
-
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
-	Term			int
-	CandidateId		int
-	LastLogIndex	int
-	LastLogTerm		int
-}
-
-//
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
-type RequestVoteReply struct {
-	// Your data here (2A).
-	Term 			int
-	VoteGranted		bool
-	Server 			int // which peer
-	Err 			Err
-}
-
-type AppendEntriesArgs struct {
-	Term 			int
-	LeaderId		int
-	PrevLogIndex	int
-	PrevLogTerm		int
-	Entries 		[]LogEntry
-	LeaderCommit	int
-}
-
-type AppendEntriesReply struct {
-	Term 			int
-	Success			bool
-}
-
-//
-// example RequestVote RPC handler.
-//
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
-
-	//if args.Term < rf.currentTerm {
-	//	reply.Term = rf.currentTerm
-	//	reply.VoteGranted = false
-	//}
-	//
-	//if args.LastLogTerm < rf.log[len(rf.log)-1].Term {
-	//	reply.Term = rf.currentTerm
-	//	reply.VoteGranted = false
-	//} else if args.LastLogTerm == rf.log[len(rf.log)-1].Term {
-	//	if args.LastLogIndex < len(rf.log) {
-	//		reply.Term = rf.currentTerm
-	//		reply.VoteGranted = false
-	//	}
-	//}
-	//rf.votedFor = args.CandidateId
-
-}
-
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-
 }
 
 //
@@ -262,7 +192,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
-
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
