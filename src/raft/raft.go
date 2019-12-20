@@ -105,8 +105,8 @@ func generateRandDuration(minDuration time.Duration) time.Duration {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
 	return rf.currentTerm, rf.state == Leader
 }
 
@@ -282,9 +282,9 @@ func (rf *Raft) replicate() {
 }
 
 func (rf *Raft) sendLogEntry(follower int) {
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	if rf.state != Leader {
-		rf.mu.Unlock()
+	//	rf.mu.Unlock()
 		return
 	}
 
@@ -301,11 +301,11 @@ func (rf *Raft) sendLogEntry(follower int) {
 	} else {
 		args.Entries = nil
 	}
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 	var reply AppendEntriesReply
 	//不用理会失败情况，follower接收不到AppendEntries超时会发起选举
 	if rf.peers[follower].Call("Raft.AppendEntries", args, &reply) {
-		rf.mu.Lock()
+		//rf.mu.Lock()
 		if !reply.Success {
 			if reply.Term > rf.currentTerm {
 				rf.stepDown(reply.Term)
@@ -328,7 +328,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 				rf.notifyApplyMsg <- struct{}{}
 			}
 		}
-		rf.mu.Unlock()
+		//rf.mu.Unlock()
 	}
 }
 
@@ -347,9 +347,9 @@ func (rf *Raft) canCommit(index int) bool {
 }
 
 func (rf *Raft) campaign() {
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	if rf.state == Leader {
-		rf.mu.Unlock()
+		//rf.mu.Unlock()
 		return
 	}
 
@@ -365,7 +365,7 @@ func (rf *Raft) campaign() {
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
 	args.LastLogTerm = rf.log[args.LastLogIndex].Term
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 
 	replyCh := make(chan RequestVoteReply, len(rf.peers) - 1)
 	for i := 0; i < len(rf.peers); i++ {
@@ -386,40 +386,44 @@ func (rf *Raft) campaign() {
 				// retry
 				go rf.solicit(reply.Server, &args, replyCh)
 			} else {
-				rf.mu.Lock()
+				//rf.mu.Lock()
 				//出现network partition，产生了新的term
 				if reply.Term > rf.currentTerm {
 					//发现term不是最新的，stepdown后停止竞选
 					rf.stepDown(reply.Term)
-					rf.mu.Unlock()
+					//rf.mu.Unlock()
 					return
 				}
-				rf.mu.Unlock()
+				//rf.mu.Unlock()
 			}
 		}
 	}
 
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	if rf.state == Candidate {
 		rf.state = Leader
 		rf.reinitIndex()
-		rf.tick()
+		go rf.tick()
 	}
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 }
 
-func (rf *Raft) apply(applyCh chan ApplyMsg) {
+func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 	for {
 		select {
 		case <-rf.notifyApplyMsg:
-		if rf.lastApplied < rf.commitIndex {
-			for _, entry := range rf.log[rf.lastApplied:rf.commitIndex] {
+			//rf.mu.Lock()
+			var entries []LogEntry
+			if rf.lastApplied < rf.commitIndex {
+				entries = rf.log[rf.lastApplied+1:rf.commitIndex+1]
+				rf.lastApplied = rf.commitIndex
+			}
+			//rf.mu.Unlock()
+
+			for _, entry := range entries {
+				//todo CommandIndex: entry.LogIndex ?
 				applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: entry.LogIndex}
 			}
-			rf.mu.Lock()
-			rf.lastApplied = rf.commitIndex
-			rf.mu.Unlock()
-		}
 		case <-rf.shutdown:
 			return
 		}
@@ -433,15 +437,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.currentLeader = -1
+	rf.state = Follower
+	rf.currentTerm = 0
 	rf.logIndex = 1
 	rf.votedFor = -1
-	rf.log = make([]LogEntry, 0)
+	rf.log = []LogEntry{{0, nil, 0}} //log entry at index 0 is unused
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
+	rf.notifyApplyMsg = make(chan struct{}, 100)
+	rf.shutdown = make(chan struct{})
 	rf.electionTimer = time.NewTimer(generateRandDuration(electionTimeout))
-	rf.notifyApplyMsg = make(chan struct{})
 
 	// Your initialization code here (2A, 2B, 2C).
 
