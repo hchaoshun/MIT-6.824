@@ -92,6 +92,7 @@ type Raft struct {
 	nextIndex		[]int
 	matchIndex		[]int
 	notifyApplyMsg	chan struct{} //更新commitIndex时chan写入
+	shutdown		chan struct{}
 	electionTimer	*time.Timer
 }
 
@@ -257,7 +258,6 @@ func (rf *Raft) tick() {
 	timer := time.NewTimer(broadcastTime)
 	for {
 		select {
-		//todo shutdown
 		case <-timer.C:
 			if _, isLeader := rf.GetState(); !isLeader {
 				return
@@ -267,6 +267,8 @@ func (rf *Raft) tick() {
 				<-timer.C
 			}
 			timer.Reset(broadcastTime)
+		case <-rf.shutdown:
+			return
 		}
 	}
 }
@@ -308,7 +310,9 @@ func (rf *Raft) sendLogEntry(follower int) {
 			if reply.Term > rf.currentTerm {
 				rf.stepDown(reply.Term)
 			} else {
-				//todo how to handle inconsistency ?
+				//retry
+				rf.nextIndex[follower] = Min(1, reply.ConflictIndex - 1)
+				go rf.sendLogEntry(follower)
 			}
 		} else {
 			entriesLen := 0
@@ -383,7 +387,7 @@ func (rf *Raft) campaign() {
 				go rf.solicit(reply.Server, &args, replyCh)
 			} else {
 				rf.mu.Lock()
-				//todo when term > currentTerm ?
+				//出现network partition，产生了新的term
 				if reply.Term > rf.currentTerm {
 					//发现term不是最新的，stepdown后停止竞选
 					rf.stepDown(reply.Term)
@@ -406,29 +410,22 @@ func (rf *Raft) campaign() {
 
 func (rf *Raft) apply(applyCh chan ApplyMsg) {
 	for {
-		<-rf.notifyApplyMsg
+		select {
+		case <-rf.notifyApplyMsg:
 		if rf.lastApplied < rf.commitIndex {
 			for _, entry := range rf.log[rf.lastApplied:rf.commitIndex] {
-				applyCh <- ApplyMsg{CommandValid: true, Command:entry.Command, CommandIndex:entry.LogIndex}
+				applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: entry.LogIndex}
 			}
 			rf.mu.Lock()
 			rf.lastApplied = rf.commitIndex
 			rf.mu.Unlock()
 		}
+		case <-rf.shutdown:
+			return
+		}
 	}
 }
 
-//
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
-//
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -457,7 +454,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			select {
 			case <-rf.electionTimer.C:
 				rf.campaign()
-			//todo return finally
+			case <-rf.shutdown:
+				return
 			}
 		}
 	}()

@@ -31,23 +31,33 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	reply.Err, reply.Server = OK, rf.me
 
-	//if args.Term < rf.currentTerm {
-	//	reply.Term = rf.currentTerm
-	//	reply.VoteGranted = false
-	//}
-	//
-	//if args.LastLogTerm < rf.log[len(rf.log)-1].Term {
-	//	reply.Term = rf.currentTerm
-	//	reply.VoteGranted = false
-	//} else if args.LastLogTerm == rf.log[len(rf.log)-1].Term {
-	//	if args.LastLogIndex < len(rf.log) {
-	//		reply.Term = rf.currentTerm
-	//		reply.VoteGranted = false
-	//	}
-	//}
-	//rf.votedFor = args.CandidateId
+	if rf.currentTerm <= args.Term {
+		if rf.currentTerm < args.Term {
+			rf.currentTerm = args.Term
+			rf.votedFor = -1
+			rf.state = Follower
+		}
+		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+			lastLogIndex := rf.logIndex - 1
+			lastLogTerm := rf.log[lastLogIndex].Term
+			if lastLogTerm < args.LastLogTerm ||
+				(lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
+				rf.votedFor = args.CandidateId
+				rf.state = Follower
+				rf.resetElectionTimer(generateRandDuration(electionTimeout))
+
+				reply.VoteGranted = true
+				reply.Term = rf.currentTerm
+				return
+			}
+		}
+	}
+	reply.VoteGranted = false
+	reply.Term = rf.currentTerm
 
 }
 
