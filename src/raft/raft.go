@@ -97,6 +97,7 @@ type Raft struct {
 }
 
 func generateRandDuration(minDuration time.Duration) time.Duration {
+	//todo 这样设置是否合适?
 	extra := time.Duration(rand.Int63()) % minDuration
 	return time.Duration(minDuration + extra)
 }
@@ -104,16 +105,17 @@ func generateRandDuration(minDuration time.Duration) time.Duration {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	//rf.mu.Lock()
-	//defer rf.mu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.currentTerm, rf.state == Leader
 }
 
 func (rf *Raft) resetElectionTimer(duration time.Duration) {
-	if !rf.electionTimer.Stop() {
-		<-rf.electionTimer.C
-	}
+	//if !rf.electionTimer.Stop() {
+	//	<-rf.electionTimer.C
+	//}
+	//rf.electionTimer.Reset(duration)
+	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(duration)
 }
 
@@ -282,9 +284,9 @@ func (rf *Raft) replicate() {
 }
 
 func (rf *Raft) sendLogEntry(follower int) {
-	//rf.mu.Lock()
+	rf.mu.Lock()
 	if rf.state != Leader {
-	//	rf.mu.Unlock()
+		rf.mu.Unlock()
 		return
 	}
 
@@ -301,11 +303,11 @@ func (rf *Raft) sendLogEntry(follower int) {
 	} else {
 		args.Entries = nil
 	}
-	//rf.mu.Unlock()
+	rf.mu.Unlock()
 	var reply AppendEntriesReply
 	//不用理会失败情况，follower接收不到AppendEntries超时会发起选举
-	if rf.peers[follower].Call("Raft.AppendEntries", args, &reply) {
-		//rf.mu.Lock()
+	if rf.peers[follower].Call("Raft.AppendEntries", &args, &reply) {
+		rf.mu.Lock()
 		if !reply.Success {
 			if reply.Term > rf.currentTerm {
 				rf.stepDown(reply.Term)
@@ -328,7 +330,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 				rf.notifyApplyMsg <- struct{}{}
 			}
 		}
-		//rf.mu.Unlock()
+		rf.mu.Unlock()
 	}
 }
 
@@ -347,9 +349,9 @@ func (rf *Raft) canCommit(index int) bool {
 }
 
 func (rf *Raft) campaign() {
-	//rf.mu.Lock()
+	rf.mu.Lock()
 	if rf.state == Leader {
-		//rf.mu.Unlock()
+		rf.mu.Unlock()
 		return
 	}
 
@@ -357,15 +359,15 @@ func (rf *Raft) campaign() {
 	rf.currentTerm += 1
 	rf.votedFor = rf.me
 	//generateRandDuration(electionTimeout) always greater than electionTimeout
-	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 	timer := time.After(electionTimeout)
 
+	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 	args := RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
 	args.LastLogTerm = rf.log[args.LastLogIndex].Term
-	//rf.mu.Unlock()
+	rf.mu.Unlock()
 
 	replyCh := make(chan RequestVoteReply, len(rf.peers) - 1)
 	for i := 0; i < len(rf.peers); i++ {
@@ -386,39 +388,40 @@ func (rf *Raft) campaign() {
 				// retry
 				go rf.solicit(reply.Server, &args, replyCh)
 			} else {
-				//rf.mu.Lock()
+				rf.mu.Lock()
 				//出现network partition，产生了新的term
 				if reply.Term > rf.currentTerm {
 					//发现term不是最新的，stepdown后停止竞选
 					rf.stepDown(reply.Term)
-					//rf.mu.Unlock()
+					rf.mu.Unlock()
 					return
 				}
-				//rf.mu.Unlock()
+				rf.mu.Unlock()
 			}
 		}
 	}
+	DPrintf("me: %d, voteCount: %d, majority: %d", rf.me, voteCount, majorityCount)
 
-	//rf.mu.Lock()
+	rf.mu.Lock()
 	if rf.state == Candidate {
 		rf.state = Leader
 		rf.reinitIndex()
 		go rf.tick()
 	}
-	//rf.mu.Unlock()
+	rf.mu.Unlock()
 }
 
 func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 	for {
 		select {
 		case <-rf.notifyApplyMsg:
-			//rf.mu.Lock()
+			rf.mu.Lock()
 			var entries []LogEntry
 			if rf.lastApplied < rf.commitIndex {
 				entries = rf.log[rf.lastApplied+1:rf.commitIndex+1]
 				rf.lastApplied = rf.commitIndex
 			}
-			//rf.mu.Unlock()
+			rf.mu.Unlock()
 
 			for _, entry := range entries {
 				//todo CommandIndex: entry.LogIndex ?

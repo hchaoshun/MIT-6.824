@@ -43,6 +43,7 @@ type config struct {
 	applyErr  []string // from apply channel readers
 	connected []bool   // whether each server is on the net
 	saved     []*Persister
+	//todo 二维数组代表什么?
 	endnames  [][]string    // the port file names each sends to
 	logs      []map[int]int // copy of each server's committed entries
 	start     time.Time     // time at which make_config() was called
