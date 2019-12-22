@@ -211,14 +211,22 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	// Your code here (2B).
+	if rf.state != Leader {
+		return -1, -1, false
+	}
 
+	index := rf.logIndex
+	term := rf.currentTerm
+	entry := LogEntry{LogIndex:index, Term:term, Command:command}
+	rf.log = append(rf.log, entry)
+	rf.matchIndex[rf.me] = index
+	rf.logIndex += 1
+	go rf.replicate()
 
-	return index, term, isLeader
+	return index, term, true
 }
 
 //
