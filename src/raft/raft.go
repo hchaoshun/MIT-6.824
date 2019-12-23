@@ -97,7 +97,6 @@ type Raft struct {
 }
 
 func generateRandDuration(minDuration time.Duration) time.Duration {
-	//todo 这样设置是否合适?
 	extra := time.Duration(rand.Int63()) % minDuration
 	return time.Duration(minDuration + extra)
 }
@@ -115,6 +114,7 @@ func (rf *Raft) resetElectionTimer(duration time.Duration) {
 	//	<-rf.electionTimer.C
 	//}
 	//rf.electionTimer.Reset(duration)
+	//todo 这样设置是否合适?
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(duration)
 }
@@ -273,9 +273,7 @@ func (rf *Raft) tick() {
 				return
 			}
 			go rf.replicate()
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			timer.Reset(broadcastTime)
 		case <-rf.shutdown:
 			return
@@ -408,7 +406,7 @@ func (rf *Raft) campaign() {
 			}
 		}
 	}
-	DPrintf("me: %d, voteCount: %d, majority: %d", rf.me, voteCount, majorityCount)
+	DPrintf("server %d win the election", rf.me)
 
 	rf.mu.Lock()
 	if rf.state == Candidate {
@@ -431,8 +429,8 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 			}
 			rf.mu.Unlock()
 
+			//DPrintf("entries: %v", entries)
 			for _, entry := range entries {
-				//todo CommandIndex: entry.LogIndex ?
 				applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: entry.LogIndex}
 			}
 		case <-rf.shutdown:
@@ -471,6 +469,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		for {
 			select {
 			case <-rf.electionTimer.C:
+				//DPrintf("%v start campaign", rf.me)
 				rf.campaign()
 			case <-rf.shutdown:
 				return

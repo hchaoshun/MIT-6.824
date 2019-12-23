@@ -57,6 +57,7 @@ func TestReElection2A(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 
 	// if the leader disconnects, a new one should be elected.
+	//todo disconnect和connect是怎么做到的
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
 
@@ -67,6 +68,7 @@ func TestReElection2A(t *testing.T) {
 
 	// if there's no quorum, no leader should
 	// be elected.
+	//majority数量的server挂掉，应该没有leader
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
@@ -92,12 +94,14 @@ func TestBasicAgree2B(t *testing.T) {
 
 	iters := 3
 	for index := 1; index < iters+1; index++ {
+		//没有start()之前，nCommitted()返回0
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
 		}
 
 		xindex := cfg.one(index*100, servers, false)
+		//DPrintf("one return xindex: %v", xindex)
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
 		}

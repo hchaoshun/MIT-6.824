@@ -45,7 +45,7 @@ type config struct {
 	saved     []*Persister
 	//todo 二维数组代表什么?
 	endnames  [][]string    // the port file names each sends to
-	logs      []map[int]int // copy of each server's committed entries
+	logs      []map[int]int // copy of each server's committed entries map[CommandIndex]Command
 	start     time.Time     // time at which make_config() was called
 	// begin()/end() statistics
 	t0        time.Time // time at which test_test.go called cfg.begin()
@@ -312,6 +312,7 @@ func (cfg *config) checkOneLeader() int {
 
 		lastTermWithLeader := -1
 		for term, leaders := range leaders {
+			//有多个leader，报错
 			if len(leaders) > 1 {
 				cfg.t.Fatalf("term %d has %d (>1) leaders", term, len(leaders))
 			}
@@ -324,11 +325,13 @@ func (cfg *config) checkOneLeader() int {
 			return leaders[lastTermWithLeader][0]
 		}
 	}
+	//试了10次还没有leader，报错
 	cfg.t.Fatalf("expected one leader, got none")
 	return -1
 }
 
 // check that everyone agrees on the term.
+//检查所有server当前的term是否一致
 func (cfg *config) checkTerms() int {
 	term := -1
 	for i := 0; i < cfg.n; i++ {
@@ -360,6 +363,7 @@ func (cfg *config) checkNoLeader() {
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	cmd := -1
+	//DPrintf("log: %v", cfg.logs)
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.applyErr[i] != "" {
 			cfg.t.Fatal(cfg.applyErr[i])
@@ -424,6 +428,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // times, in case a leader fails just after Start().
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
+//寻找leader执行Start(cmd),当返回的index被>=expectedServers个servers确认committed后，返回index
 func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 	t0 := time.Now()
 	starts := 0
@@ -453,6 +458,7 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				//DPrintf("nd: %v, cmd1: %v",nd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {
