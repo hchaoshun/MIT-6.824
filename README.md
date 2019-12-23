@@ -5,7 +5,7 @@
     - [ ] Challenge 1
 - [ ] Lab 2
     - [x] 2A
-    - [ ] 2B
+    - [x] 2B
     - [ ] 2C
 - [ ] Lab 3
     - [ ] 3A
