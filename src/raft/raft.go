@@ -18,6 +18,9 @@ package raft
 //
 
 import (
+	"bytes"
+	"labgob"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -133,6 +136,17 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	e.Encode(rf.logIndex)
+	e.Encode(rf.commitIndex)
+	e.Encode(rf.lastApplied)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -155,6 +169,20 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	currentTerm, votedFor, logIndex, commitIndex, lastApplied := 0, 0, 0, 0, 0
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&logIndex) != nil ||
+		d.Decode(&commitIndex) != nil ||
+		d.Decode(&lastApplied) != nil ||
+		d.Decode(&rf.log) != nil {
+		log.Fatal("error while unmarshal raft state.")
+	}
+	rf.currentTerm, rf.votedFor, rf.logIndex, rf.commitIndex, rf.lastApplied =
+		currentTerm, votedFor, logIndex, commitIndex, lastApplied
 }
 
 //
@@ -300,6 +328,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 	args.Term = rf.currentTerm
 	args.LeaderId = rf.me
 	prevLogIndex := rf.nextIndex[follower] - 1
+	//DPrintf("prevLogIndex: %v, log: %v", prevLogIndex, rf.log)
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = rf.log[prevLogIndex].Term
 	args.LeaderCommit = rf.commitIndex
