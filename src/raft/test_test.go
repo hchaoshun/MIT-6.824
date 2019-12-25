@@ -738,6 +738,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.begin("Test (2C): Figure 8 (unreliable)")
 
 	cfg.one(rand.Int()%10000, 1, true)
+	DPrintf("pass first one")
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
@@ -780,7 +781,9 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 	}
 
+	DPrintf("start second one")
 	cfg.one(rand.Int()%10000, servers, true)
+	DPrintf("end second one")
 
 	cfg.end()
 }

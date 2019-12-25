@@ -287,6 +287,9 @@ func (rf *Raft) reinitIndex() {
 	peersNum := len(rf.peers)
 	rf.nextIndex, rf.matchIndex = make([]int, peersNum), make([]int, peersNum)
 	for i := 0; i < peersNum; i++ {
+		if rf.logIndex == 0 {
+			DPrintf("find 0")
+		}
 		rf.nextIndex[i] = rf.logIndex
 		rf.matchIndex[i] = 0
 	}
@@ -336,7 +339,8 @@ func (rf *Raft) sendLogEntry(follower int) {
 	args.Term = rf.currentTerm
 	args.LeaderId = rf.me
 	prevLogIndex := rf.nextIndex[follower] - 1
-	//DPrintf("prevLogIndex: %v, log: %v", prevLogIndex, rf.log)
+	//DPrintf("follower: %v, rf.nextIndex: %v, prevLogIndex: %v, loglen: %v",
+	//	follower, rf.nextIndex, prevLogIndex, len(rf.log))
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = rf.log[prevLogIndex].Term
 	args.LeaderCommit = rf.commitIndex
@@ -356,7 +360,9 @@ func (rf *Raft) sendLogEntry(follower int) {
 				rf.stepDown(reply.Term)
 			} else {
 				//retry
-				rf.nextIndex[follower] = Min(1, reply.ConflictIndex - 1)
+				rf.nextIndex[follower] = Max(1, reply.ConflictIndex)
+				//DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
+				//	rf.nextIndex, follower, reply.ConflictIndex)
 				go rf.sendLogEntry(follower)
 			}
 		} else {
@@ -445,7 +451,7 @@ func (rf *Raft) campaign() {
 			}
 		}
 	}
-	DPrintf("server %d win the election", rf.me)
+	DPrintf("server %d win the election, rf.logIndex: %v", rf.me, rf.logIndex)
 
 	rf.mu.Lock()
 	if rf.state == Candidate {

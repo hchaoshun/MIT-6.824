@@ -83,7 +83,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	prevLogIndex := args.PrevLogIndex
 	//consistency check
 	if prevLogIndex >= logIndex || rf.log[prevLogIndex].Term != args.PrevLogTerm {
-		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, Min(logIndex - 1, prevLogIndex)
+		conflictIndex := Min(logIndex - 1, prevLogIndex)
+		conflictTerm := rf.log[conflictIndex].Term
+		for ; conflictTerm > rf.commitIndex && rf.log[conflictIndex-1].Term == conflictTerm; conflictIndex-- {
+
+		}
+		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, conflictIndex
 		return
 	}
 
