@@ -127,6 +127,7 @@ func (rf *Raft) resetElectionTimer(duration time.Duration) {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
+//dump
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
@@ -152,6 +153,7 @@ func (rf *Raft) persist() {
 //
 // restore previously persisted state.
 //
+//load
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
@@ -173,12 +175,16 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	currentTerm, votedFor, logIndex, commitIndex, lastApplied := 0, 0, 0, 0, 0
+	//n1, n2, n3, n4, n5, n6 := d.Decode(&currentTerm), d.Decode(&votedFor), d.Decode(&logIndex),
+	//	d.Decode(&commitIndex), d.Decode(&lastApplied), d.Decode(&rf.log)
+	//DPrintf("%v, %v, %v, %v, %v, %v", n1, n2, n3, n4, n5, n6)
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
+		d.Decode(&rf.log) != nil ||
 		d.Decode(&logIndex) != nil ||
 		d.Decode(&commitIndex) != nil ||
-		d.Decode(&lastApplied) != nil ||
-		d.Decode(&rf.log) != nil {
+		d.Decode(&lastApplied) != nil {
+		//DPrintf("%v, %v, %v, %v, %v, %v", currentTerm, votedFor, logIndex, commitIndex, lastApplied, rf.log)
 		log.Fatal("error while unmarshal raft state.")
 	}
 	rf.currentTerm, rf.votedFor, rf.logIndex, rf.commitIndex, rf.lastApplied =
@@ -252,6 +258,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log = append(rf.log, entry)
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
+	rf.persist()
 	go rf.replicate()
 
 	return index, term, true
@@ -289,6 +296,7 @@ func (rf *Raft) stepDown(term int) {
 	rf.currentTerm = term
 	rf.state = Follower
 	rf.votedFor = -1
+	rf.persist()
 	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 }
 
@@ -362,6 +370,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 
 			if rf.canCommit(commitIndex) {
 				rf.commitIndex = commitIndex
+				rf.persist()
 				rf.notifyApplyMsg <- struct{}{}
 			}
 		}
@@ -402,6 +411,7 @@ func (rf *Raft) campaign() {
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
 	args.LastLogTerm = rf.log[args.LastLogIndex].Term
+	rf.persist()
 	rf.mu.Unlock()
 
 	replyCh := make(chan RequestVoteReply, len(rf.peers) - 1)
@@ -456,6 +466,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 				entries = rf.log[rf.lastApplied+1:rf.commitIndex+1]
 				rf.lastApplied = rf.commitIndex
 			}
+			rf.persist()
 			rf.mu.Unlock()
 
 			//DPrintf("entries: %v", entries)
