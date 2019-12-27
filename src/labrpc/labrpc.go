@@ -49,7 +49,9 @@ package labrpc
 //   pass svc to srv.AddService()
 //
 
-import "labgob"
+import (
+	"labgob"
+)
 import "bytes"
 import "reflect"
 import "sync"
@@ -270,6 +272,7 @@ func (rn *Network) ProcessReq(req reqMsg) {
 			// Russ points out that this timer arrangement will decrease
 			// the number of goroutines, so that the race
 			// detector is less likely to get upset.
+			//fmt.Println("because of delay")
 			time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
 				req.replyCh <- reply
 			})

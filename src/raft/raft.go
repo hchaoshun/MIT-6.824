@@ -382,6 +382,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 		}
 		rf.mu.Unlock()
 	}
+	//DPrintf("me: %v, leader: %v", rf.me, rf.currentLeader)
 }
 
 func (rf *Raft) canCommit(index int) bool {
@@ -410,6 +411,7 @@ func (rf *Raft) campaign() {
 	rf.votedFor = rf.me
 	//generateRandDuration(electionTimeout) always greater than electionTimeout
 	timer := time.After(electionTimeout)
+	DPrintf("%v start campaign. current term: %v", rf.me, rf.currentTerm)
 
 	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 	args := RequestVoteArgs{}
@@ -451,7 +453,7 @@ func (rf *Raft) campaign() {
 			}
 		}
 	}
-	DPrintf("server %d win the election, rf.logIndex: %v", rf.me, rf.logIndex)
+	DPrintf("server %d win the election, current term: %v", rf.me, rf.currentTerm)
 
 	rf.mu.Lock()
 	if rf.state == Candidate {

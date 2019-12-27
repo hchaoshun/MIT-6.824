@@ -71,8 +71,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	electionTime := generateRandDuration(electionTimeout)
-	rf.resetElectionTimer(electionTime)
+	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 	//DPrintf("%v reset election timer to %v", rf.me, electionTime)
 	rf.currentLeader = args.LeaderId
 	rf.state = Follower

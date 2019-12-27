@@ -99,7 +99,6 @@ func TestBasicAgree2B(t *testing.T) {
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
 		}
-
 		xindex := cfg.one(index*100, servers, false)
 		//DPrintf("one return xindex: %v", xindex)
 		if xindex != index {
@@ -738,11 +737,11 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	cfg.begin("Test (2C): Figure 8 (unreliable)")
 
 	cfg.one(rand.Int()%10000, 1, true)
-	DPrintf("pass first one")
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
 		if iters == 200 {
+			DPrintf("already in iters 200")
 			cfg.setlongreordering(true)
 		}
 		leader := -1
@@ -781,9 +780,9 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 	}
 
-	DPrintf("start second one")
+	//DPrintf("start second one")
 	cfg.one(rand.Int()%10000, servers, true)
-	DPrintf("end second one")
+	//DPrintf("end second one")
 
 	cfg.end()
 }
