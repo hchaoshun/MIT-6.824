@@ -35,7 +35,7 @@ type KVServer struct {
 	// Your definitions here.
 }
 
-
+//这两个函数应该用raft.Start submit command
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 }
