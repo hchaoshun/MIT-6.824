@@ -6,9 +6,10 @@ import (
 	"log"
 	"raft"
 	"sync"
+	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -46,19 +47,23 @@ type KVServer struct {
 func (kv *KVServer) Start(command interface{}) (bool, Err, string){
 	//todo
 	_, _, ok := kv.rf.Start(command)
+	DPrintf("%v notifyCh wait receive...", kv.me)
 	select {
 	case msg := <-kv.notifyCh:
+		DPrintf("%v applyCh received msg: %v", kv.me, msg)
 		return ok, msg.Err, msg.Value
-	//todo timeout ?
+	//必须设置超时，否则会永久阻塞
+	case <-time.After(StartTimeoutInterval):
+		return false, ErrWrongLeader, ""
 	}
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	reply.WrongLeader, reply.Err, reply.Value = kv.Start(args)
+	reply.WrongLeader, reply.Err, reply.Value = kv.Start(args.copy())
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	reply.WrongLeader, reply.Err, _ = kv.Start(args)
+	reply.WrongLeader, reply.Err, _ = kv.Start(args.copy())
 }
 
 //
@@ -89,13 +94,17 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 	} else {
 		//todo
 	}
+	DPrintf("%v send result: %v to notifyCh", kv.me, result)
 	kv.notifyCh <- result
 }
 
 func(kv *KVServer) run() {
+	//DPrintf("run server %v", kv.me)
 	for {
+		DPrintf("%v applyCh wait receive...", kv.me)
 		select {
 		case msg := <-kv.applyCh:
+			DPrintf("%v applyCh received msg: %v", kv.me, msg)
 			if msg.CommandValid {
 				kv.apply(msg)
 			} //todo else ?

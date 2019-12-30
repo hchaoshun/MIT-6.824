@@ -248,6 +248,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	//DPrintf("follower rf: %v", *rf)
 	if rf.state != Leader {
 		return -1, -1, false
 	}
@@ -259,6 +260,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
 	rf.persist()
+	DPrintf("currentLeader: %v, me: %v", rf.currentLeader, rf.me)
 	go rf.replicate()
 
 	return index, term, true
@@ -321,6 +323,9 @@ func (rf *Raft) tick() {
 }
 
 func (rf *Raft) replicate() {
+	if rf.currentLeader == rf.me {
+		DPrintf("replicate")
+	}
 	for follower := 0; follower < len(rf.peers); follower++ {
 		if follower != rf.me {
 			go rf.sendLogEntry(follower)
@@ -335,6 +340,9 @@ func (rf *Raft) sendLogEntry(follower int) {
 		return
 	}
 
+	if rf.currentLeader == rf.me {
+		DPrintf("this1")
+	}
 	args := AppendEntriesArgs{}
 	args.Term = rf.currentTerm
 	args.LeaderId = rf.me
@@ -344,6 +352,9 @@ func (rf *Raft) sendLogEntry(follower int) {
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = rf.log[prevLogIndex].Term
 	args.LeaderCommit = rf.commitIndex
+	if rf.currentLeader == rf.me {
+		DPrintf("this2")
+	}
 	if rf.logIndex > rf.nextIndex[follower] {
 		entries := rf.log[prevLogIndex+1:rf.logIndex]
 		args.Entries = entries
@@ -351,6 +362,9 @@ func (rf *Raft) sendLogEntry(follower int) {
 		args.Entries = nil
 	}
 	rf.mu.Unlock()
+	if rf.currentLeader == rf.me {
+		DPrintf("this3")
+	}
 	var reply AppendEntriesReply
 	//不用理会失败情况，follower接收不到AppendEntries超时会发起选举
 	if rf.peers[follower].Call("Raft.AppendEntries", &args, &reply) {
@@ -400,6 +414,7 @@ func (rf *Raft) canCommit(index int) bool {
 }
 
 func (rf *Raft) campaign() {
+	//DPrintf("%v start campaign", rf.me)
 	rf.mu.Lock()
 	if rf.state == Leader {
 		rf.mu.Unlock()
@@ -411,7 +426,7 @@ func (rf *Raft) campaign() {
 	rf.votedFor = rf.me
 	//generateRandDuration(electionTimeout) always greater than electionTimeout
 	timer := time.After(electionTimeout)
-	DPrintf("%v start campaign. current term: %v", rf.me, rf.currentTerm)
+	//DPrintf("%v start campaign. current term: %v", rf.me, rf.currentTerm)
 
 	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 	args := RequestVoteArgs{}
@@ -453,11 +468,12 @@ func (rf *Raft) campaign() {
 			}
 		}
 	}
-	DPrintf("server %d win the election, current term: %v", rf.me, rf.currentTerm)
+	//DPrintf("server %d win the election, current term: %v", rf.me, rf.currentTerm)
 
 	rf.mu.Lock()
 	if rf.state == Candidate {
 		rf.state = Leader
+		rf.currentLeader = rf.me
 		rf.reinitIndex()
 		go rf.tick()
 	}
@@ -468,6 +484,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 	for {
 		select {
 		case <-rf.notifyApplyMsg:
+			//DPrintf("received notifyApplyMsg")
 			rf.mu.Lock()
 			var entries []LogEntry
 			if rf.lastApplied < rf.commitIndex {
@@ -479,6 +496,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 
 			//DPrintf("entries: %v", entries)
 			for _, entry := range entries {
+				DPrintf("%v apply msg %v to applyCh", rf.me, entry)
 				applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: entry.LogIndex}
 			}
 		case <-rf.shutdown:
