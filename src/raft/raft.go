@@ -97,6 +97,7 @@ type Raft struct {
 	notifyApplyMsg	chan struct{} //更新commitIndex时chan写入
 	shutdown		chan struct{}
 	electionTimer	*time.Timer
+	testFlag		bool
 }
 
 func generateRandDuration(minDuration time.Duration) time.Duration {
@@ -253,6 +254,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return -1, -1, false
 	}
 
+	rf.testFlag = true
 	index := rf.logIndex
 	term := rf.currentTerm
 	entry := LogEntry{LogIndex:index, Term:term, Command:command}
@@ -323,9 +325,6 @@ func (rf *Raft) tick() {
 }
 
 func (rf *Raft) replicate() {
-	if rf.currentLeader == rf.me {
-		DPrintf("replicate")
-	}
 	for follower := 0; follower < len(rf.peers); follower++ {
 		if follower != rf.me {
 			go rf.sendLogEntry(follower)
@@ -339,10 +338,6 @@ func (rf *Raft) sendLogEntry(follower int) {
 		rf.mu.Unlock()
 		return
 	}
-
-	if rf.currentLeader == rf.me {
-		DPrintf("this1")
-	}
 	args := AppendEntriesArgs{}
 	args.Term = rf.currentTerm
 	args.LeaderId = rf.me
@@ -352,9 +347,6 @@ func (rf *Raft) sendLogEntry(follower int) {
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = rf.log[prevLogIndex].Term
 	args.LeaderCommit = rf.commitIndex
-	if rf.currentLeader == rf.me {
-		DPrintf("this2")
-	}
 	if rf.logIndex > rf.nextIndex[follower] {
 		entries := rf.log[prevLogIndex+1:rf.logIndex]
 		args.Entries = entries
@@ -362,9 +354,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 		args.Entries = nil
 	}
 	rf.mu.Unlock()
-	if rf.currentLeader == rf.me {
-		DPrintf("this3")
-	}
+
 	var reply AppendEntriesReply
 	//不用理会失败情况，follower接收不到AppendEntries超时会发起选举
 	if rf.peers[follower].Call("Raft.AppendEntries", &args, &reply) {
@@ -523,6 +513,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, 0)
 	rf.notifyApplyMsg = make(chan struct{}, 100)
 	rf.shutdown = make(chan struct{})
+	rf.testFlag = false
 	rf.electionTimer = time.NewTimer(generateRandDuration(electionTimeout))
 
 	// Your initialization code here (2A, 2B, 2C).

@@ -18,6 +18,13 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+//必须注册，否则报空指针异常
+func init() {
+	labgob.Register(GetArgs{})
+	labgob.Register(PutAppendArgs{})
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+}
+
 
 type Op struct {
 	// Your definitions here.

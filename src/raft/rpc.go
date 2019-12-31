@@ -66,7 +66,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	//DPrintf("args: %v", args)
+	if rf.testFlag {
+		DPrintf("start")
+	}
+	//if rf.testFlag {
+	//	DPrintf("me: %v, args: %v",rf.me, args)
+	//}
 	//DPrintf("pass")
 	if rf.currentTerm > args.Term {
 		reply.Term, reply.Success = rf.currentTerm, false
