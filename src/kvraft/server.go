@@ -33,7 +33,6 @@ type Op struct {
 }
 
 type NotifyMsg struct {
-	WrongLeader bool
 	Err         Err
 	Value       string
 }
@@ -51,26 +50,36 @@ type KVServer struct {
 	notifyCh		chan NotifyMsg
 }
 
-func (kv *KVServer) Start(command interface{}) (bool, Err, string){
+func (kv *KVServer) Start(command interface{}) (Err, string) {
+	DPrintf("call KVServer start")
 	//todo
 	_, _, ok := kv.rf.Start(command)
-	DPrintf("%v notifyCh wait receive...", kv.me)
+	if !ok {
+		DPrintf("is not leader, so start return")
+		return ErrWrongLeader, ""
+	}
+	DPrintf("wait notifyCh read or timeout")
 	select {
 	case msg := <-kv.notifyCh:
-		DPrintf("%v applyCh received msg: %v", kv.me, msg)
-		return ok, msg.Err, msg.Value
+		DPrintf("%v notifyCh received msg.", kv.me)
+		return msg.Err, msg.Value
 	//必须设置超时，否则会永久阻塞
 	case <-time.After(StartTimeoutInterval):
-		return false, ErrWrongLeader, ""
+		DPrintf("%v notifyCh received msg timeout.", kv.me)
+		return ErrTimeout, ""
 	}
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	reply.WrongLeader, reply.Err, reply.Value = kv.Start(args.copy())
+	DPrintf("rpc call Get, args: %v", *args)
+	reply.Err, reply.Value = kv.Start(args.copy())
+	DPrintf("rpc call Get, args: %v return", *args)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	reply.WrongLeader, reply.Err, _ = kv.Start(args.copy())
+	DPrintf("rpc call PutAppend, args: %v", *args)
+	reply.Err, _ = kv.Start(args.copy())
+	DPrintf("rpc call PutAppend, args: %v return", *args)
 }
 
 //
@@ -85,7 +94,7 @@ func (kv *KVServer) Kill() {
 }
 
 func(kv *KVServer) apply(msg raft.ApplyMsg) {
-	result := NotifyMsg{}
+	result := NotifyMsg{Err:"OK", Value:""}
 	if arg, ok := msg.Command.(GetArgs); ok {
 		//读操作没必要缓存和检查是否是上次retry
 		result.Value = kv.data[arg.Key]
@@ -99,19 +108,20 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 			kv.cache[arg.ClientId] = arg.RequestSeq
 		}
 	} else {
-		//todo
+		result.Err = ErrWrongLeader
 	}
-	DPrintf("%v send result: %v to notifyCh", kv.me, result)
+	DPrintf("%v send result: to notifyCh", kv.me)
 	kv.notifyCh <- result
 }
 
 func(kv *KVServer) run() {
 	//DPrintf("run server %v", kv.me)
 	for {
-		DPrintf("%v applyCh wait receive...", kv.me)
+		//DPrintf("%v applyCh wait receive...", kv.me)
 		select {
 		case msg := <-kv.applyCh:
-			DPrintf("%v applyCh received msg: %v", kv.me, msg)
+			//接收到此消息一定是leader
+			DPrintf("%v applyCh received msg.", kv.me)
 			if msg.CommandValid {
 				kv.apply(msg)
 			} //todo else ?
@@ -134,6 +144,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.cache = make(map[int64]int)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.notifyCh = make(chan NotifyMsg, 1)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	go kv.run()

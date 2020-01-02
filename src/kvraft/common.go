@@ -6,7 +6,9 @@ type Err string
 const (
 	OK       = "OK"
 	ErrNoKey = "ErrNoKey"
+	//todo 有必要将timeout和wrongleader分开？
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrTimeout = "ErrTimeout"
 )
 
 const StartTimeoutInterval = time.Duration(3 * time.Second)
@@ -22,7 +24,6 @@ type PutAppendArgs struct {
 }
 
 type PutAppendReply struct {
-	WrongLeader bool
 	Err         Err
 }
 
@@ -35,7 +36,6 @@ type GetArgs struct {
 }
 
 type GetReply struct {
-	WrongLeader bool
 	Err         Err
 	Value       string
 }

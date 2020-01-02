@@ -246,14 +246,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	DPrintf("call Raft start1")
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	//DPrintf("follower rf: %v", *rf)
 	if rf.state != Leader {
+		DPrintf("raft: sorry, %v is not leader", rf.me)
 		return -1, -1, false
 	}
 
+	DPrintf("call Raft start2")
 	rf.testFlag = true
 	index := rf.logIndex
 	term := rf.currentTerm
@@ -264,6 +267,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.persist()
 	DPrintf("currentLeader: %v, me: %v", rf.currentLeader, rf.me)
 	go rf.replicate()
+	DPrintf("call Raft start4")
 
 	return index, term, true
 }
@@ -367,7 +371,8 @@ func (rf *Raft) sendLogEntry(follower int) {
 				rf.nextIndex[follower] = Max(1, reply.ConflictIndex)
 				//DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
 				//	rf.nextIndex, follower, reply.ConflictIndex)
-				go rf.sendLogEntry(follower)
+				//todo 会死锁
+				//go rf.sendLogEntry(follower)
 			}
 		} else {
 			entriesLen := 0
@@ -486,7 +491,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 
 			//DPrintf("entries: %v", entries)
 			for _, entry := range entries {
-				DPrintf("%v apply msg %v to applyCh", rf.me, entry)
+				//DPrintf("%v apply msg %v to applyCh", rf.me, entry)
 				applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: entry.LogIndex}
 			}
 		case <-rf.shutdown:
