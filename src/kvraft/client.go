@@ -33,10 +33,6 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 }
 
 func (ck *Clerk) Get(key string) string {
-	DPrintf("client get %v", key)
-	defer func() {
-		DPrintf("client get %v return", key)
-	}()
 	for {
 		args := GetArgs{Key:key}
 		var reply GetReply
@@ -46,7 +42,7 @@ func (ck *Clerk) Get(key string) string {
 		}
 		ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
 		time.Sleep(RetryInterval)
-		DPrintf("Get args: %v, return err. retry", args)
+		//DPrintf("Get args: %v, return err. retry", args)
 	}
 }
 
@@ -62,17 +58,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 		ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
 		time.Sleep(RetryInterval)
-		DPrintf("PutAppend args: %v, return err. retry", args)
+		//DPrintf("PutAppend args: %v, return err. retry", args)
 	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	DPrintf("client put %v, %v", key, value)
 	ck.PutAppend(key, value, "Put")
-	DPrintf("client put %v, %v return", key, value)
 }
 func (ck *Clerk) Append(key string, value string) {
-	DPrintf("client append %v, %v", key, value)
 	ck.PutAppend(key, value, "Append")
-	DPrintf("client append %v, %v", key, value)
 }

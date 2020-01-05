@@ -47,15 +47,16 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 
-	currentLeader 	int
-	state 			serverState
-	currentTerm		int
-	logIndex		int //index of next log entry to be stored, initialized to 1
-	votedFor 		int
-	log 			[]LogEntry
+	currentLeader 		int
+	state 				serverState
+	currentTerm			int
+	logIndex			int //index of next log entry to be stored, initialized to 1
+	votedFor 			int
+	Log 				[]LogEntry
 
-	commitIndex		int
-	lastApplied		int
+	commitIndex			int
+	lastApplied			int
+	lastIncludedIndex 	int //snapshot最后的index， 初始化为0
 
 	//每次选举成功nextIndex都重新初始化为logIndex，所以Leader的nextIndex总是>=follower的logIndex
 	nextIndex		[]int
@@ -93,7 +94,7 @@ func (rf *Raft) persist() {
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
-	e.Encode(rf.log)
+	e.Encode(rf.Log)
 	e.Encode(rf.logIndex)
 	e.Encode(rf.commitIndex)
 	e.Encode(rf.lastApplied)
@@ -115,7 +116,7 @@ func (rf *Raft) readPersist(data []byte) {
 	//DPrintf("%v, %v, %v, %v, %v, %v", n1, n2, n3, n4, n5, n6)
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&rf.log) != nil ||
+		d.Decode(&rf.Log) != nil ||
 		d.Decode(&logIndex) != nil ||
 		d.Decode(&commitIndex) != nil ||
 		d.Decode(&lastApplied) != nil {
@@ -124,6 +125,24 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	rf.currentTerm, rf.votedFor, rf.logIndex, rf.commitIndex, rf.lastApplied =
 		currentTerm, votedFor, logIndex, commitIndex, lastApplied
+}
+
+func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if lastCommandIndex > rf.lastIncludedIndex {
+		truncationStartIndex := rf.getOffsetIndex(lastCommandIndex)
+		//todo 保留truncationStartIndex是为consistency check考虑？
+		rf.Log = append([]LogEntry{{0, nil, 0}}, rf.Log[truncationStartIndex:]...)
+		rf.lastIncludedIndex = lastCommandIndex
+		state := rf.persister.ReadRaftState()
+		rf.persister.SaveStateAndSnapshot(state, snapshot)
+	}
+}
+
+//snapshot后lastIncludedIndex为log的起始
+func (rf *Raft) getOffsetIndex(index int) int{
+	return index - rf.lastIncludedIndex
 }
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
@@ -152,7 +171,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := rf.logIndex
 	term := rf.currentTerm
 	entry := LogEntry{LogIndex:index, Term:term, Command:command}
-	rf.log = append(rf.log, entry)
+	rf.Log = append(rf.Log, entry)
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
 	rf.persist()
@@ -234,10 +253,10 @@ func (rf *Raft) sendLogEntry(follower int) {
 	//DPrintf("follower: %v, rf.nextIndex: %v, prevLogIndex: %v, loglen: %v",
 	//	follower, rf.nextIndex, prevLogIndex, len(rf.log))
 	args.PrevLogIndex = prevLogIndex
-	args.PrevLogTerm = rf.log[prevLogIndex].Term
+	args.PrevLogTerm = rf.Log[prevLogIndex].Term
 	args.LeaderCommit = rf.commitIndex
 	if rf.logIndex > rf.nextIndex[follower] {
-		entries := rf.log[prevLogIndex+1:rf.logIndex]
+		entries := rf.Log[prevLogIndex+1:rf.logIndex]
 		args.Entries = entries
 	} else {
 		args.Entries = nil
@@ -257,7 +276,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 				//DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
 				//	rf.nextIndex, follower, reply.ConflictIndex)
 				//todo 会死锁
-				//go rf.sendLogEntry(follower)
+				go rf.sendLogEntry(follower)
 			}
 		} else {
 			entriesLen := 0
@@ -268,6 +287,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 			rf.nextIndex[follower] = commitIndex + 1
 			rf.matchIndex[follower] = commitIndex
 
+			//必须要majority之后才能提交
 			if rf.canCommit(commitIndex) {
 				rf.commitIndex = commitIndex
 				rf.persist()
@@ -280,7 +300,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 }
 
 func (rf *Raft) canCommit(index int) bool {
-	if index < rf.logIndex && index > rf.commitIndex && rf.log[index].Term == rf.currentTerm {
+	if index < rf.logIndex && index > rf.commitIndex && rf.Log[index].Term == rf.currentTerm {
 		majorities, count := len(rf.peers) / 2 + 1, 0
 		for i := 0; i < len(rf.peers); i++ {
 			if rf.matchIndex[i] >= index {
@@ -313,7 +333,7 @@ func (rf *Raft) campaign() {
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
-	args.LastLogTerm = rf.log[args.LastLogIndex].Term
+	args.LastLogTerm = rf.Log[args.LastLogIndex].Term
 	rf.persist()
 	rf.mu.Unlock()
 
@@ -368,7 +388,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 			rf.mu.Lock()
 			var entries []LogEntry
 			if rf.lastApplied < rf.commitIndex {
-				entries = rf.log[rf.lastApplied+1:rf.commitIndex+1]
+				entries = rf.Log[rf.lastApplied+1:rf.commitIndex+1]
 				rf.lastApplied = rf.commitIndex
 			}
 			rf.persist()
@@ -396,9 +416,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.logIndex = 1
 	rf.votedFor = -1
-	rf.log = []LogEntry{{0, nil, 0}} //log entry at index 0 is unused
+	rf.Log = []LogEntry{{0, nil, 0}} //log entry at index 0 is unused
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+	rf.lastIncludedIndex = 0
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
 	rf.notifyApplyMsg = make(chan struct{}, 100)
@@ -408,6 +429,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.readPersist(persister.ReadRaftState())
 
+	//将更新后的command应用到server， 即发送到applych
 	go rf.apply(applyCh)
 	go func() {
 		for {

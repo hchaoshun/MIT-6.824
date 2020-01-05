@@ -171,6 +171,7 @@ func (cfg *config) ConnectAll() {
 }
 
 // Sets up 2 partitions with connectivity between servers in each  partition.
+//将p1和p2分区
 func (cfg *config) partition(p1 []int, p2 []int) {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -188,6 +189,7 @@ func (cfg *config) partition(p1 []int, p2 []int) {
 // Create a clerk with clerk specific server names.
 // Give it connections to all of the servers, but for
 // now enable only connections to servers in to[].
+//创建一个clerk并连接to
 func (cfg *config) makeClient(to []int) *Clerk {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -338,6 +340,9 @@ func (cfg *config) Leader() (bool, int) {
 // Partition servers into 2 groups and put current leader in minority
 func (cfg *config) make_partition() ([]int, []int) {
 	_, l := cfg.Leader()
+	//假如0是leader
+	//p1 1, 2, 3
+	//p2 4, 0
 	p1 := make([]int, cfg.n/2+1)
 	p2 := make([]int, cfg.n/2)
 	j := 0

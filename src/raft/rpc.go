@@ -1,7 +1,6 @@
 package raft
 
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
 	Term			int
 	CandidateId		int
 	LastLogIndex	int
@@ -43,7 +42,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 			lastLogIndex := rf.logIndex - 1
-			lastLogTerm := rf.log[lastLogIndex].Term
+			lastLogTerm := rf.Log[lastLogIndex].Term
 			if lastLogTerm < args.LastLogTerm ||
 				(lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
 				rf.votedFor = args.CandidateId
@@ -88,10 +87,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	logIndex := rf.logIndex
 	prevLogIndex := args.PrevLogIndex
 	//consistency check
-	if prevLogIndex >= logIndex || rf.log[prevLogIndex].Term != args.PrevLogTerm {
+	if prevLogIndex >= logIndex || rf.Log[prevLogIndex].Term != args.PrevLogTerm {
 		conflictIndex := Min(logIndex - 1, prevLogIndex)
-		conflictTerm := rf.log[conflictIndex].Term
-		for ; conflictTerm > rf.commitIndex && rf.log[conflictIndex-1].Term == conflictTerm; conflictIndex-- {
+		conflictTerm := rf.Log[conflictIndex].Term
+		for ; conflictTerm > rf.commitIndex && rf.Log[conflictIndex-1].Term == conflictTerm; conflictIndex-- {
 
 		}
 		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, conflictIndex
@@ -108,14 +107,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 		//代表不匹配情况，找到不匹配位置删除然后跳出
-		if rf.log[prevLogIndex + 1 + i].Term != args.Entries[i].Term {
+		if rf.Log[prevLogIndex + 1 + i].Term != args.Entries[i].Term {
 			rf.logIndex = prevLogIndex + 1 + i
-			rf.log = rf.log[:rf.logIndex]
+			rf.Log = rf.Log[:rf.logIndex]
 			break
 		}
 	}
 	for ; i < len(args.Entries); i++ {
-		rf.log = append(rf.log, args.Entries[i])
+		rf.Log = append(rf.Log, args.Entries[i])
 		rf.logIndex += 1
 	}
 
