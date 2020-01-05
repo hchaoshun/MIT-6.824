@@ -10,9 +10,6 @@ import (
 )
 import "labrpc"
 
-// import "bytes"
-// import "labgob"
-
 const broadcastTime = time.Duration(100 * time.Millisecond)
 const electionTimeout = time.Duration(1000 * time.Millisecond)
 
@@ -88,8 +85,7 @@ func (rf *Raft) resetElectionTimer(duration time.Duration) {
 	rf.electionTimer.Reset(duration)
 }
 
-//dump
-func (rf *Raft) persist() {
+func (rf *Raft) getPersistState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -99,6 +95,12 @@ func (rf *Raft) persist() {
 	e.Encode(rf.commitIndex)
 	e.Encode(rf.lastApplied)
 	data := w.Bytes()
+	return data
+}
+
+//dump
+func (rf *Raft) persist() {
+	data := rf.getPersistState()
 	rf.persister.SaveRaftState(data)
 }
 
@@ -127,15 +129,17 @@ func (rf *Raft) readPersist(data []byte) {
 		currentTerm, votedFor, logIndex, commitIndex, lastApplied
 }
 
+//lastIncludedIndex用ApplyMsg 里的CommandIndex更新,总是位于snapshot后的第一个index
 func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if lastCommandIndex > rf.lastIncludedIndex {
+		//truncationStartIndex总是等于快照log的长度
 		truncationStartIndex := rf.getOffsetIndex(lastCommandIndex)
 		//todo 保留truncationStartIndex是为consistency check考虑？
 		rf.Log = append([]LogEntry{{0, nil, 0}}, rf.Log[truncationStartIndex:]...)
 		rf.lastIncludedIndex = lastCommandIndex
-		state := rf.persister.ReadRaftState()
+		state := rf.getPersistState()
 		rf.persister.SaveStateAndSnapshot(state, snapshot)
 	}
 }
@@ -240,12 +244,45 @@ func (rf *Raft) replicate() {
 	}
 }
 
+func (rf *Raft) sendSnapshot(follower int) {
+	rf.mu.Lock()
+	if rf.state != Leader {
+		rf.mu.Unlock()
+		return
+	}
+
+	args := InstallSnapshotArgs{Term:rf.currentTerm, LeaderId:rf.me, LastIncludedIndex:rf.lastIncludedIndex,
+		LastIncludedTerm:rf.Log[rf.lastIncludedIndex].Term, Data:rf.persister.ReadSnapshot()}
+	rf.mu.Unlock()
+	var reply InstallSnapshotReply
+	//不考虑失败情况
+	if rf.peers[follower].Call("Raft.InstallSnapshot", &args, &reply) {
+		rf.mu.Lock()
+		if reply.Term > rf.currentTerm {
+			rf.stepDown(reply.Term)
+		} else {
+			rf.nextIndex[follower] = rf.lastIncludedIndex + 1
+			rf.matchIndex[follower] = rf.lastIncludedIndex
+		}
+		rf.mu.Unlock()
+	}
+}
+
 func (rf *Raft) sendLogEntry(follower int) {
 	rf.mu.Lock()
 	if rf.state != Leader {
 		rf.mu.Unlock()
 		return
 	}
+
+	//follower的nextIndex已经leader被丢弃，正常情况下不会发生，网络异常或新节点加入才会发生
+	if rf.nextIndex[follower] <= rf.lastIncludedIndex {
+		go rf.sendSnapshot(follower)
+		//todo 不发送log了？
+		rf.mu.Unlock()
+		return
+	}
+
 	args := AppendEntriesArgs{}
 	args.Term = rf.currentTerm
 	args.LeaderId = rf.me
@@ -275,8 +312,11 @@ func (rf *Raft) sendLogEntry(follower int) {
 				rf.nextIndex[follower] = Max(1, reply.ConflictIndex)
 				//DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
 				//	rf.nextIndex, follower, reply.ConflictIndex)
-				//todo 会死锁
 				go rf.sendLogEntry(follower)
+				//更新nextIndex，需要判断是否需要发送snapshot rpc
+				if rf.nextIndex[follower] <= rf.lastIncludedIndex {
+					go rf.sendSnapshot(follower)
+				}
 			}
 		} else {
 			entriesLen := 0

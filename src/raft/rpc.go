@@ -29,6 +29,18 @@ type AppendEntriesReply struct {
 	ConflictIndex	int
 }
 
+type InstallSnapshotArgs struct {
+	Term 				int
+	LeaderId			int
+	LastIncludedIndex	int
+	LastIncludedTerm 	int
+	Data 				[]byte
+}
+
+type InstallSnapshotReply struct {
+	Term 				int
+}
+
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -123,5 +135,35 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if oldCommitIndex < rf.commitIndex {
 		rf.notifyApplyMsg <- struct{}{}
 	}
+	rf.persist()
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		return
+	}
+	rf.currentLeader = args.LeaderId
+	if rf.lastIncludedIndex < args.LastIncludedIndex {
+		truncationStartIndex := rf.getOffsetIndex(args.LastIncludedIndex)
+		rf.lastIncludedIndex = args.LastIncludedIndex
+		oldCommitIndex := rf.commitIndex
+		rf.commitIndex = rf.lastIncludedIndex
+		rf.logIndex = rf.lastIncludedIndex + 1
+		//正常情况下truncationStartIndex 应该>=len(rf.log),小于则说明truncationStartIndex以后的日志都是最近加入的
+		if truncationStartIndex < len(rf.Log) {
+			rf.Log = rf.Log[truncationStartIndex:]
+		} else {
+			rf.Log = []LogEntry{{0, nil, 0}}
+		}
+		rf.persister.SaveStateAndSnapshot(rf.getPersistState(), args.Data)
+		if oldCommitIndex < rf.commitIndex {
+			rf.notifyApplyMsg <- struct{}{}
+		}
+	}
+	rf.resetElectionTimer(generateRandDuration(electionTimeout))
 	rf.persist()
 }
