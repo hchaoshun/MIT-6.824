@@ -149,6 +149,11 @@ func (rf *Raft) getOffsetIndex(index int) int{
 	return index - rf.lastIncludedIndex
 }
 
+func (rf *Raft) getEntry(index int) LogEntry {
+	offsetIndex := rf.getOffsetIndex(index)
+	return rf.Log[offsetIndex]
+}
+
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
@@ -160,7 +165,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	DPrintf("call Raft start1")
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -170,7 +174,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return -1, -1, false
 	}
 
-	DPrintf("call Raft start2")
 	rf.testFlag = true
 	index := rf.logIndex
 	term := rf.currentTerm
@@ -179,9 +182,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
 	rf.persist()
-	DPrintf("currentLeader: %v, me: %v", rf.currentLeader, rf.me)
+	//DPrintf("currentLeader: %v, me: %v", rf.currentLeader, rf.me)
 	go rf.replicate()
-	DPrintf("call Raft start4")
 
 	return index, term, true
 }
@@ -203,9 +205,6 @@ func (rf *Raft) reinitIndex() {
 	peersNum := len(rf.peers)
 	rf.nextIndex, rf.matchIndex = make([]int, peersNum), make([]int, peersNum)
 	for i := 0; i < peersNum; i++ {
-		if rf.logIndex == 0 {
-			DPrintf("find 0")
-		}
 		rf.nextIndex[i] = rf.logIndex
 		rf.matchIndex[i] = 0
 	}
@@ -237,6 +236,9 @@ func (rf *Raft) tick() {
 }
 
 func (rf *Raft) replicate() {
+	//加锁防止复制过程中servers变化
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	for follower := 0; follower < len(rf.peers); follower++ {
 		if follower != rf.me {
 			go rf.sendLogEntry(follower)
@@ -252,7 +254,7 @@ func (rf *Raft) sendSnapshot(follower int) {
 	}
 
 	args := InstallSnapshotArgs{Term:rf.currentTerm, LeaderId:rf.me, LastIncludedIndex:rf.lastIncludedIndex,
-		LastIncludedTerm:rf.Log[rf.lastIncludedIndex].Term, Data:rf.persister.ReadSnapshot()}
+		LastIncludedTerm:rf.getEntry(rf.lastIncludedIndex).Term, Data:rf.persister.ReadSnapshot()}
 	rf.mu.Unlock()
 	var reply InstallSnapshotReply
 	//不考虑失败情况
@@ -275,10 +277,10 @@ func (rf *Raft) sendLogEntry(follower int) {
 		return
 	}
 
-	//follower的nextIndex已经leader被丢弃，正常情况下不会发生，网络异常或新节点加入才会发生
+	//follower的nextIndex之前的log已经leader被丢弃.正常情况下不会发生，网络异常或新节点加入才会发生
 	if rf.nextIndex[follower] <= rf.lastIncludedIndex {
+		//发送snapshot后在InstallSnapshot里重置计数器，所以直接返回
 		go rf.sendSnapshot(follower)
-		//todo 不发送log了？
 		rf.mu.Unlock()
 		return
 	}
@@ -289,10 +291,12 @@ func (rf *Raft) sendLogEntry(follower int) {
 	prevLogIndex := rf.nextIndex[follower] - 1
 	//DPrintf("follower: %v, rf.nextIndex: %v, prevLogIndex: %v, loglen: %v",
 	//	follower, rf.nextIndex, prevLogIndex, len(rf.log))
+	//todo 这样设置是否合适
 	args.PrevLogIndex = prevLogIndex
 	args.PrevLogTerm = rf.Log[prevLogIndex].Term
 	args.LeaderCommit = rf.commitIndex
 	if rf.logIndex > rf.nextIndex[follower] {
+		//todo 这样设置是否合适
 		entries := rf.Log[prevLogIndex+1:rf.logIndex]
 		args.Entries = entries
 	} else {
@@ -324,6 +328,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 				entriesLen = len(args.Entries)
 			}
 			commitIndex := prevLogIndex + entriesLen
+			//todo apply arrive in out of order时，是否正确
 			rf.nextIndex[follower] = commitIndex + 1
 			rf.matchIndex[follower] = commitIndex
 
@@ -365,6 +370,7 @@ func (rf *Raft) campaign() {
 	rf.currentTerm += 1
 	rf.votedFor = rf.me
 	//generateRandDuration(electionTimeout) always greater than electionTimeout
+	//选举超时则选举失败，返回
 	timer := time.After(electionTimeout)
 	//DPrintf("%v start campaign. current term: %v", rf.me, rf.currentTerm)
 
@@ -372,6 +378,7 @@ func (rf *Raft) campaign() {
 	args := RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
+	//todo 这样设置是否合适
 	args.LastLogIndex = rf.logIndex - 1
 	args.LastLogTerm = rf.Log[args.LastLogIndex].Term
 	rf.persist()
@@ -387,6 +394,7 @@ func (rf *Raft) campaign() {
 	voteCount, majorityCount := 0, len(rf.peers)/2
 	for voteCount < majorityCount {
 		select {
+		//超时则选举失败
 		case <-timer:
 			return
 		case reply := <-replyCh:
@@ -411,6 +419,7 @@ func (rf *Raft) campaign() {
 	//DPrintf("server %d win the election, current term: %v", rf.me, rf.currentTerm)
 
 	rf.mu.Lock()
+	//todo 还需要这个if？
 	if rf.state == Candidate {
 		rf.state = Leader
 		rf.currentLeader = rf.me
@@ -435,6 +444,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 			rf.mu.Unlock()
 
 			//DPrintf("entries: %v", entries)
+			//todo CommandValid == false 的情况？
 			for _, entry := range entries {
 				//DPrintf("%v apply msg %v to applyCh", rf.me, entry)
 				applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: entry.LogIndex}
@@ -462,6 +472,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastIncludedIndex = 0
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
+	//todo 需要100缓冲?
 	rf.notifyApplyMsg = make(chan struct{}, 100)
 	rf.shutdown = make(chan struct{})
 	rf.testFlag = false

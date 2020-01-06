@@ -10,6 +10,7 @@ type RequestVoteArgs struct {
 type RequestVoteReply struct {
 	Term 			int
 	VoteGranted		bool
+	//下面两个变量用于追踪错误原因和错误机器
 	Server 			int // which peer
 	Err 			Err
 }
@@ -47,6 +48,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Err, reply.Server = OK, rf.me
 
 	if rf.currentTerm <= args.Term {
+		//正常情况下rf.currentTerm < args.Term， 因为candidate在选举前++term
 		if rf.currentTerm < args.Term {
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
