@@ -144,7 +144,8 @@ func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 	}
 }
 
-//snapshot后lastIncludedIndex为log的起始
+//snapshot后会更新logIndex/commitIndex/nextIndex/matchIndex，都为log的相对位置(都远远大于len(log))
+//lastIncludedIndex为log的起始，所以凡是取log日志时都要减去rf.lastIncludedIndex
 func (rf *Raft) getOffsetIndex(index int) int{
 	return index - rf.lastIncludedIndex
 }
@@ -152,6 +153,13 @@ func (rf *Raft) getOffsetIndex(index int) int{
 func (rf *Raft) getEntry(index int) LogEntry {
 	offsetIndex := rf.getOffsetIndex(index)
 	return rf.Log[offsetIndex]
+}
+
+func (rf *Raft) getRangeEntry(from, to int) []LogEntry {
+	f := rf.getOffsetIndex(from)
+	t := rf.getOffsetIndex(to)
+	//todo right?
+	return rf.Log[f:t]
 }
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
@@ -291,13 +299,11 @@ func (rf *Raft) sendLogEntry(follower int) {
 	prevLogIndex := rf.nextIndex[follower] - 1
 	//DPrintf("follower: %v, rf.nextIndex: %v, prevLogIndex: %v, loglen: %v",
 	//	follower, rf.nextIndex, prevLogIndex, len(rf.log))
-	//todo 这样设置是否合适
 	args.PrevLogIndex = prevLogIndex
-	args.PrevLogTerm = rf.Log[prevLogIndex].Term
+	args.PrevLogTerm = rf.getEntry(prevLogIndex).Term
 	args.LeaderCommit = rf.commitIndex
 	if rf.logIndex > rf.nextIndex[follower] {
-		//todo 这样设置是否合适
-		entries := rf.Log[prevLogIndex+1:rf.logIndex]
+		entries := rf.getRangeEntry(prevLogIndex+1, rf.logIndex)
 		args.Entries = entries
 	} else {
 		args.Entries = nil
@@ -345,7 +351,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 }
 
 func (rf *Raft) canCommit(index int) bool {
-	if index < rf.logIndex && index > rf.commitIndex && rf.Log[index].Term == rf.currentTerm {
+	if index < rf.logIndex && index > rf.commitIndex && rf.getEntry(index).Term == rf.currentTerm {
 		majorities, count := len(rf.peers) / 2 + 1, 0
 		for i := 0; i < len(rf.peers); i++ {
 			if rf.matchIndex[i] >= index {
@@ -380,7 +386,7 @@ func (rf *Raft) campaign() {
 	args.CandidateId = rf.me
 	//todo 这样设置是否合适
 	args.LastLogIndex = rf.logIndex - 1
-	args.LastLogTerm = rf.Log[args.LastLogIndex].Term
+	args.LastLogTerm = rf.getEntry(args.LastLogIndex).Term
 	rf.persist()
 	rf.mu.Unlock()
 

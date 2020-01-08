@@ -56,7 +56,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 			lastLogIndex := rf.logIndex - 1
-			lastLogTerm := rf.Log[lastLogIndex].Term
+			lastLogTerm := rf.getEntry(lastLogIndex).Term
 			if lastLogTerm < args.LastLogTerm ||
 				(lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
 				rf.votedFor = args.CandidateId
@@ -79,13 +79,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if rf.testFlag {
-		DPrintf("start")
-	}
-	//if rf.testFlag {
-	//	DPrintf("me: %v, args: %v",rf.me, args)
-	//}
-	//DPrintf("pass")
 	if rf.currentTerm > args.Term {
 		reply.Term, reply.Success = rf.currentTerm, false
 		return
@@ -100,12 +93,24 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	logIndex := rf.logIndex
 	prevLogIndex := args.PrevLogIndex
-	//consistency check
-	if prevLogIndex >= logIndex || rf.Log[prevLogIndex].Term != args.PrevLogTerm {
-		conflictIndex := Min(logIndex - 1, prevLogIndex)
-		conflictTerm := rf.Log[conflictIndex].Term
-		for ; conflictTerm > rf.commitIndex && rf.Log[conflictIndex-1].Term == conflictTerm; conflictIndex-- {
 
+	//条件成立说明快照已更新，而logIndex没有更新
+	if prevLogIndex < rf.lastIncludedIndex {
+		reply.Success, reply.ConflictIndex = false, rf.lastIncludedIndex + 1
+		return
+	}
+
+	//consistency check
+	//正常情况下logIndex = prevLogIndex + 1,即两个server日志相同，当follower日志少于leader时， logIndex <= prevLogIndex
+	if prevLogIndex >= logIndex || rf.getEntry(prevLogIndex).Term != args.PrevLogTerm {
+		//当follower日志少于leader时， conflictIndex为rf.LogIndex - 1
+		//当follower日志大于leader时， conflictIndex为prevLogIndex
+		//conflictIndex总是<=args.PrevLogIndex
+		conflictIndex := Min(logIndex - 1, prevLogIndex)
+		conflictTerm := rf.getEntry(conflictIndex).Term
+		//todo 什么情况下rf.lastIncludedIndex > rf.commitIndex
+		floor := Max(rf.commitIndex, rf.lastIncludedIndex)
+		for ; conflictTerm > floor && rf.getEntry(conflictIndex-1).Term == conflictTerm; conflictIndex-- {
 		}
 		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, conflictIndex
 		return
@@ -121,9 +126,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 		//代表不匹配情况，找到不匹配位置删除然后跳出
-		if rf.Log[prevLogIndex + 1 + i].Term != args.Entries[i].Term {
+		if rf.getEntry(prevLogIndex + 1 + i).Term != args.Entries[i].Term {
 			rf.logIndex = prevLogIndex + 1 + i
-			rf.Log = rf.Log[:rf.logIndex]
+			truncationIndex := rf.getOffsetIndex(rf.logIndex)
+			rf.Log = rf.Log[:truncationIndex]
 			break
 		}
 	}
@@ -139,6 +145,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	rf.persist()
 }
+
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
