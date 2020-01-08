@@ -652,16 +652,18 @@ func TestSnapshotRPC3B(t *testing.T) {
 
 	Put(cfg, ck, "a", "A")
 	check(cfg, t, ck, "a", "A")
-
+	DPrintf("after put ck a-A")
 	// a bunch of puts into the majority partition.
 	cfg.partition([]int{0, 1}, []int{2})
 	{
 		ck1 := cfg.makeClient([]int{0, 1})
 		for i := 0; i < 50; i++ {
 			Put(cfg, ck1, strconv.Itoa(i), strconv.Itoa(i))
+			DPrintf("loop %v", i)
 		}
 		time.Sleep(electionTimeout)
 		Put(cfg, ck1, "b", "B")
+		DPrintf("after put ck1 b-B")
 	}
 
 	// check that the majority partition has thrown away

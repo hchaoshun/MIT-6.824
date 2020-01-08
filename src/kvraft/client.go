@@ -51,6 +51,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for {
 		args := PutAppendArgs{Key:key, Value:value, Op:op, ClientId:ck.clientId, RequestSeq:ck.requestSeq}
 		var reply PutAppendReply
+		if key == "13" {
+			DPrintf("putAppend 13")
+		}
 		if ck.servers[ck.leaderId].Call("KVServer.PutAppend", &args, &reply) &&
 			reply.Err == "OK" {
 			return

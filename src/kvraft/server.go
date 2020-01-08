@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -62,8 +62,24 @@ func (kv *KVServer) snapshot(lastCommandIndex int) {
 	kv.rf.PersistAndSaveSnapshot(lastCommandIndex, snapshot)
 }
 
+func (kv *KVServer) readSnapshot() {
+	snapshot := kv.persister.ReadSnapshot()
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	if d.Decode(&kv.data) != nil ||
+		d.Decode(&kv.cache) != nil {
+		log.Fatal("error while unmarshal snapshot.")
+	}
+
+}
+
 func(kv *KVServer) snapshotIfNeed(lastCommandIndex int) {
 	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
+		DPrintf("trigger snapshot")
+		kv.rf.TestFlag = true
 		kv.snapshot(lastCommandIndex)
 	}
 
@@ -126,6 +142,9 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 		//读操作没必要缓存和检查是否是上次retry
 		result.Value = kv.data[arg.Key]
 	} else if arg, ok := msg.Command.(PutAppendArgs); ok {
+		if arg.Key == "13" {
+			DPrintf("put %v into data", arg.Key)
+		}
 		if kv.cache[arg.ClientId] < arg.RequestSeq {
 			if arg.Op == "Put" {
 				kv.data[arg.Key] = arg.Value
@@ -145,12 +164,17 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 func(kv *KVServer) run() {
 	for {
 		select {
+		//从raft返回的消息
 		case msg := <-kv.applyCh:
 			//接收到此消息一定是leader
-			//DPrintf("%v applyCh received msg.", kv.me)
+			//DPrintf("%v applyCh received %v", kv.me, msg)
 			if msg.CommandValid {
 				kv.apply(msg)
-			} //todo else ?
+			} else if cmd, ok := msg.Command.(string); ok {
+				if cmd == "InstallSnapshot" {
+					kv.readSnapshot()
+				}
+			}
 		case <-kv.shutdown:
 			return
 		}
