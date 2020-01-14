@@ -79,6 +79,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	if rf.TestFlag {
+		DPrintf("follower %v log: %v logIndex: %v, lastIncludedIndex: %v", rf.me, rf.Log,
+			rf.logIndex, rf.lastIncludedIndex)
+	}
+	if rf.TestFlag {
+		DPrintf("Term: %v, leaderId: %v, PrevLogIndex: %v, PrevLogTerm: %v, Entries: %v," +
+			"LeaderCommit: %v", args.Term, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm,
+			args.Entries, args.LeaderCommit)
+	}
 	if rf.currentTerm > args.Term {
 		reply.Term, reply.Success = rf.currentTerm, false
 		return
@@ -113,9 +122,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		floor := Max(rf.commitIndex, rf.lastIncludedIndex)
 		for ; conflictTerm > floor && rf.getEntry(conflictIndex-1).Term == conflictTerm; conflictIndex-- {
 		}
-		DPrintf("prevLogIndex: %v, logIndex: %v, rf.getEntry(prevLogIndex).Term: %v," +
-			"args.PrevLogTerm: %v, conflictIndex: %v", prevLogIndex, logIndex, rf.getEntry(prevLogIndex).Term,
-			args.PrevLogTerm, conflictIndex)
+		DPrintf("prevLogIndex: %v, logIndex: %v", prevLogIndex, logIndex)
 		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, conflictIndex
 		return
 	}
@@ -171,7 +178,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		if truncationStartIndex < len(rf.Log) {
 			rf.Log = rf.Log[truncationStartIndex:]
 		} else {
-			rf.Log = []LogEntry{{0, nil, 0}}
+			//todo
+			//rf.Log = []LogEntry{{0, nil, 0}}
+			rf.Log = []LogEntry{{args.LastIncludedIndex, nil, args.LastIncludedTerm}}
 		}
 		//DPrintf("InstallSnapshot. after log: %v", rf.Log)
 		rf.persister.SaveStateAndSnapshot(rf.getPersistState(), args.Data)

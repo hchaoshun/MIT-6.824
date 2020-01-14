@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -79,7 +79,6 @@ func (kv *KVServer) readSnapshot() {
 func(kv *KVServer) snapshotIfNeed(lastCommandIndex int) {
 	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
 		DPrintf("trigger snapshot, commandIndex: %v", lastCommandIndex)
-		kv.rf.TestFlag = true
 		kv.snapshot(lastCommandIndex)
 	}
 
@@ -119,11 +118,15 @@ func (kv *KVServer) Start(command interface{}) (Err, string) {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	DPrintf("get key: %v", args.Key)
 	reply.Err, reply.Value = kv.Start(args.copy())
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("put key: %v, value: %v", args.Key, args.Value)
+	if args.Key == "c" {
+		kv.rf.TestFlag = true
+	}
 	reply.Err, _ = kv.Start(args.copy())
 }
 
@@ -144,12 +147,6 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 		//读操作没必要缓存和检查是否是上次retry
 		result.Value = kv.data[arg.Key]
 	} else if arg, ok := msg.Command.(PutAppendArgs); ok {
-		if arg.Key == "12" {
-			DPrintf("put %v into data. commandIndex: %v", arg.Key, msg.CommandIndex)
-		}
-		if arg.Key == "13" {
-			DPrintf("put %v into data. commandIndex: %v", arg.Key, msg.CommandIndex)
-		}
 		if kv.cache[arg.ClientId] < arg.RequestSeq {
 			if arg.Op == "Put" {
 				kv.data[arg.Key] = arg.Value

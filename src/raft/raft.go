@@ -207,17 +207,6 @@ func (rf *Raft) tick() {
 	}
 }
 
-func (rf *Raft) replicate() {
-	//加锁防止复制过程中servers变化
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	for follower := 0; follower < len(rf.peers); follower++ {
-		if follower != rf.me {
-			go rf.sendLogEntry(follower)
-		}
-	}
-}
-
 //lastIncludedIndex用ApplyMsg 里的CommandIndex更新,总是位于snapshot后的第一个index
 func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 	if rf.TestFlag {
@@ -265,6 +254,17 @@ func (rf *Raft) sendSnapshot(follower int) {
 	}
 }
 
+func (rf *Raft) replicate() {
+	//加锁防止复制过程中servers变化
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	for follower := 0; follower < len(rf.peers); follower++ {
+		if follower != rf.me {
+			go rf.sendLogEntry(follower)
+		}
+	}
+}
+
 func (rf *Raft) sendLogEntry(follower int) {
 	rf.mu.Lock()
 	if rf.state != Leader {
@@ -274,10 +274,10 @@ func (rf *Raft) sendLogEntry(follower int) {
 
 	//follower的nextIndex之前的log已经leader被丢弃.正常情况下不会发生，网络异常或新节点加入才会发生
 	if rf.nextIndex[follower] <= rf.lastIncludedIndex {
-		if rf.TestFlag {
-			DPrintf("trigger InstallSnapshot, follower: %v, nextIndex: %v," +
-				"lastIncludedIndex: %v", follower, rf.nextIndex[follower], rf.lastIncludedIndex)
-		}
+		//if rf.TestFlag {
+		//	DPrintf("trigger InstallSnapshot, follower: %v, nextIndex: %v," +
+		//		"lastIncludedIndex: %v", follower, rf.nextIndex[follower], rf.lastIncludedIndex)
+		//}
 		//发送snapshot后在InstallSnapshot里重置计数器，所以直接返回
 		//notifyApplyMsg通知在InstallSnapshot里做
 		go rf.sendSnapshot(follower)
@@ -312,8 +312,8 @@ func (rf *Raft) sendLogEntry(follower int) {
 			} else {
 				//retry
 				rf.nextIndex[follower] = Max(1, reply.ConflictIndex)
-				DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
-					rf.nextIndex, follower, reply.ConflictIndex)
+				DPrintf("retry rf.nextIndex: %v, confilict: %v",
+					rf.nextIndex[follower], reply.ConflictIndex)
 				go rf.sendLogEntry(follower)
 				//更新nextIndex，需要判断是否需要发送snapshot rpc
 				if rf.nextIndex[follower] <= rf.lastIncludedIndex {
@@ -487,7 +487,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("Start command: %v", command)
+	if rf.TestFlag {
+		DPrintf("Start command: %v", command)
+	}
 	//DPrintf("follower rf: %v", *rf)
 	if rf.state != Leader {
 		DPrintf("raft: sorry, %v is not leader, leader: %v", rf.me, rf.currentLeader)
@@ -502,10 +504,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
 	rf.persist()
-	//DPrintf("currentLeader: %v, me: %v", rf.currentLeader, rf.me)
-	//if rf.TestFlag {
-	//	DPrintf("%v log: %v",rf.me, rf.Log)
-	//}
+	if rf.TestFlag {
+		DPrintf("leader %v log: %v lastIncludedIndex: %v",rf.me, rf.Log, rf.lastIncludedIndex)
+	}
 	go rf.replicate()
 
 	return index, term, true
