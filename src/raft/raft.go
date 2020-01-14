@@ -16,6 +16,8 @@ const electionTimeout = time.Duration(1000 * time.Millisecond)
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
+	//todo need?
+	//CommandTerm	 int
 	CommandIndex int
 }
 
@@ -58,6 +60,7 @@ type Raft struct {
 	//每次选举成功nextIndex都重新初始化为logIndex，所以Leader的nextIndex总是>=follower的logIndex
 	nextIndex		[]int
 	matchIndex		[]int
+	applyCh			chan ApplyMsg
 	notifyApplyMsg	chan struct{} //更新commitIndex时chan写入
 	shutdown		chan struct{}
 	electionTimer	*time.Timer
@@ -217,22 +220,24 @@ func (rf *Raft) replicate() {
 
 //lastIncludedIndex用ApplyMsg 里的CommandIndex更新,总是位于snapshot后的第一个index
 func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
+	if rf.TestFlag {
+		DPrintf("start PersistAndSaveSnapshot. commandIndex: %v", lastCommandIndex)
+	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if lastCommandIndex > rf.lastIncludedIndex {
-		if rf.TestFlag {
-			DPrintf("before PersistAndSaveSnapshot: %v", rf.Log)
-		}
 		//truncationStartIndex总是等于快照log的长度
 		truncationStartIndex := rf.getOffsetIndex(lastCommandIndex)
-		//todo 保留truncationStartIndex是为consistency check考虑？
-		rf.Log = append([]LogEntry{{0, nil, 0}}, rf.Log[truncationStartIndex:]...)
+		//DPrintf("leader: before log: %v", rf.Log)
+		//snapshot后log第一条日志的index应总是等于lastIncludedIndex
+		rf.Log = append([]LogEntry{}, rf.Log[truncationStartIndex:]...)
 		rf.lastIncludedIndex = lastCommandIndex
+		//DPrintf("after log: %v. lastIncludedIndex: %v", rf.Log, rf.lastIncludedIndex)
 		state := rf.getPersistState()
 		rf.persister.SaveStateAndSnapshot(state, snapshot)
-		if rf.TestFlag {
-			DPrintf("after PersistAndSaveSnapshot: %v", rf.Log)
-		}
+	}
+	if rf.TestFlag {
+		DPrintf("finish PersistAndSaveSnapshot. commandIndex: %v", lastCommandIndex)
 	}
 }
 
@@ -269,6 +274,10 @@ func (rf *Raft) sendLogEntry(follower int) {
 
 	//follower的nextIndex之前的log已经leader被丢弃.正常情况下不会发生，网络异常或新节点加入才会发生
 	if rf.nextIndex[follower] <= rf.lastIncludedIndex {
+		if rf.TestFlag {
+			DPrintf("trigger InstallSnapshot, follower: %v, nextIndex: %v," +
+				"lastIncludedIndex: %v", follower, rf.nextIndex[follower], rf.lastIncludedIndex)
+		}
 		//发送snapshot后在InstallSnapshot里重置计数器，所以直接返回
 		//notifyApplyMsg通知在InstallSnapshot里做
 		go rf.sendSnapshot(follower)
@@ -303,8 +312,8 @@ func (rf *Raft) sendLogEntry(follower int) {
 			} else {
 				//retry
 				rf.nextIndex[follower] = Max(1, reply.ConflictIndex)
-				//DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
-				//	rf.nextIndex, follower, reply.ConflictIndex)
+				DPrintf("retry rf.nextIndex: %v follower: %v confilict: %v",
+					rf.nextIndex, follower, reply.ConflictIndex)
 				go rf.sendLogEntry(follower)
 				//更新nextIndex，需要判断是否需要发送snapshot rpc
 				if rf.nextIndex[follower] <= rf.lastIncludedIndex {
@@ -417,16 +426,31 @@ func (rf *Raft) campaign() {
 	rf.mu.Unlock()
 }
 
-func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
+//todo test
+//func (rf *Raft) Replay(startIndex int) {
+//	rf.mu.Lock()
+//	if startIndex <= rf.lastIncludedIndex {
+//		rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: rf.Log[0].LogIndex, CommandTerm: rf.Log[0].Term, Command: "InstallSnapshot"}
+//		startIndex = rf.lastIncludedIndex + 1
+//		rf.lastApplied = Max(rf.lastApplied, rf.lastIncludedIndex)
+//	}
+//	entries := append([]LogEntry{}, rf.Log[rf.getOffsetIndex(startIndex):rf.getOffsetIndex(rf.lastApplied+1)]...)
+//	rf.mu.Unlock()
+//	for i := 0; i < len(entries); i++ {
+//		rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: entries[i].LogIndex, CommandTerm: entries[i].Term, Command: entries[i].Command}
+//	}
+//	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: -1, CommandTerm: -1, Command: "ReplayDone"}
+//}
+
+func (rf *Raft) apply() {
 	for {
 		select {
 		case <-rf.notifyApplyMsg:
-			if rf.TestFlag {
-				DPrintf("received notifyApplyMsg")
-				DPrintf("lastApplied: %v, commitIndex: %v," +
-					"lastIncludedIndex: %v, logIndex: %v", rf.lastApplied, rf.commitIndex,
-					rf.lastIncludedIndex, rf.logIndex)
-			}
+			//if rf.TestFlag {
+			//	DPrintf("lastApplied: %v, commitIndex: %v," +
+			//		"lastIncludedIndex: %v, logIndex: %v", rf.lastApplied, rf.commitIndex,
+			//		rf.lastIncludedIndex, rf.logIndex)
+			//}
 			rf.mu.Lock()
 			var entries []LogEntry
 			var commandValid bool
@@ -451,7 +475,7 @@ func (rf *Raft) apply(applyCh chan<- ApplyMsg) {
 			//todo CommandValid == false 的情况？
 			for _, entry := range entries {
 				//DPrintf("%v apply msg %v to applyCh", rf.me, entry)
-				applyCh <- ApplyMsg{CommandValid: commandValid, Command: entry.Command, CommandIndex: entry.LogIndex}
+				rf.applyCh <- ApplyMsg{CommandValid: commandValid, Command: entry.Command, CommandIndex: entry.LogIndex}
 			}
 		case <-rf.shutdown:
 			return
@@ -479,9 +503,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.logIndex += 1
 	rf.persist()
 	//DPrintf("currentLeader: %v, me: %v", rf.currentLeader, rf.me)
-	if rf.TestFlag {
-		DPrintf("%v log: %v",rf.me, rf.Log)
-	}
+	//if rf.TestFlag {
+	//	DPrintf("%v log: %v",rf.me, rf.Log)
+	//}
 	go rf.replicate()
 
 	return index, term, true
@@ -504,6 +528,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastIncludedIndex = 0
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
+	rf.applyCh = applyCh
 	//todo 需要100缓冲?
 	rf.notifyApplyMsg = make(chan struct{}, 100)
 	rf.shutdown = make(chan struct{})
@@ -513,7 +538,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	//将更新后的command应用到server， 即发送到applych
-	go rf.apply(applyCh)
+	go rf.apply()
 	go func() {
 		for {
 			select {

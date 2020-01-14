@@ -96,6 +96,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	//条件成立说明快照已更新，而logIndex没有更新
 	if prevLogIndex < rf.lastIncludedIndex {
+		//DPrintf("return false, prevLogIndex: %v, lastIncludedIndex: %v", prevLogIndex, rf.lastIncludedIndex)
 		reply.Success, reply.ConflictIndex = false, rf.lastIncludedIndex + 1
 		return
 	}
@@ -112,6 +113,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		floor := Max(rf.commitIndex, rf.lastIncludedIndex)
 		for ; conflictTerm > floor && rf.getEntry(conflictIndex-1).Term == conflictTerm; conflictIndex-- {
 		}
+		DPrintf("prevLogIndex: %v, logIndex: %v, rf.getEntry(prevLogIndex).Term: %v," +
+			"args.PrevLogTerm: %v, conflictIndex: %v", prevLogIndex, logIndex, rf.getEntry(prevLogIndex).Term,
+			args.PrevLogTerm, conflictIndex)
 		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, conflictIndex
 		return
 	}
@@ -163,11 +167,13 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.commitIndex = rf.lastIncludedIndex
 		rf.logIndex = rf.lastIncludedIndex + 1
 		//正常情况下truncationStartIndex 应该>=len(rf.log),小于则说明truncationStartIndex以后的日志都是最近加入的
+		//DPrintf("InstallSnapshot. before log: %v", rf.Log)
 		if truncationStartIndex < len(rf.Log) {
 			rf.Log = rf.Log[truncationStartIndex:]
 		} else {
 			rf.Log = []LogEntry{{0, nil, 0}}
 		}
+		//DPrintf("InstallSnapshot. after log: %v", rf.Log)
 		rf.persister.SaveStateAndSnapshot(rf.getPersistState(), args.Data)
 		if oldCommitIndex < rf.commitIndex {
 			rf.notifyApplyMsg <- struct{}{}

@@ -78,7 +78,7 @@ func (kv *KVServer) readSnapshot() {
 
 func(kv *KVServer) snapshotIfNeed(lastCommandIndex int) {
 	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
-		DPrintf("trigger snapshot")
+		DPrintf("trigger snapshot, commandIndex: %v", lastCommandIndex)
 		kv.rf.TestFlag = true
 		kv.snapshot(lastCommandIndex)
 	}
@@ -87,6 +87,7 @@ func(kv *KVServer) snapshotIfNeed(lastCommandIndex int) {
 
 func (kv *KVServer) notifyIfPresent(index int, reply NotifyMsg) {
 	if ch, ok := kv.notifyChanMap[index]; ok {
+		DPrintf("send to notifyCh. %v, %v", index, reply)
 		ch <- reply
 		delete(kv.notifyChanMap, index)
 	}
@@ -104,7 +105,7 @@ func (kv *KVServer) Start(command interface{}) (Err, string) {
 	kv.Unlock()
 	select {
 	case msg := <-notifyCh:
-		//DPrintf("%v notifyCh received msg.", kv.me)
+		DPrintf("received: %v", msg)
 		return msg.Err, msg.Value
 	//必须设置超时，否则会永久阻塞
 	//超时原因可能是由于网络分区没有得到majority同意
@@ -122,6 +123,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	DPrintf("put key: %v, value: %v", args.Key, args.Value)
 	reply.Err, _ = kv.Start(args.copy())
 }
 
@@ -142,8 +144,11 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 		//读操作没必要缓存和检查是否是上次retry
 		result.Value = kv.data[arg.Key]
 	} else if arg, ok := msg.Command.(PutAppendArgs); ok {
+		if arg.Key == "12" {
+			DPrintf("put %v into data. commandIndex: %v", arg.Key, msg.CommandIndex)
+		}
 		if arg.Key == "13" {
-			DPrintf("put %v into data", arg.Key)
+			DPrintf("put %v into data. commandIndex: %v", arg.Key, msg.CommandIndex)
 		}
 		if kv.cache[arg.ClientId] < arg.RequestSeq {
 			if arg.Op == "Put" {
@@ -156,12 +161,13 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 	} else {
 		result.Err = ErrWrongLeader
 	}
-	//DPrintf("%v send result: to notifyCh", kv.me)
+	DPrintf("call notifyIfPresent, %v, %v", msg.CommandIndex, result)
 	kv.notifyIfPresent(msg.CommandIndex, result)
 	kv.snapshotIfNeed(msg.CommandIndex)
 }
 
 func(kv *KVServer) run() {
+	//go kv.rf.Replay(1)
 	for {
 		select {
 		//从raft返回的消息
@@ -169,6 +175,7 @@ func(kv *KVServer) run() {
 			//接收到此消息一定是leader
 			//DPrintf("%v applyCh received %v", kv.me, msg)
 			if msg.CommandValid {
+				DPrintf("call apply. commandIndex: %v", msg.CommandIndex)
 				kv.apply(msg)
 			} else if cmd, ok := msg.Command.(string); ok {
 				if cmd == "InstallSnapshot" {
