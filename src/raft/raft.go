@@ -10,35 +10,9 @@ import (
 )
 import "labrpc"
 
-const broadcastTime = time.Duration(100 * time.Millisecond)
-const electionTimeout = time.Duration(1000 * time.Millisecond)
+const AppendEntriesInterval = time.Duration(100 * time.Millisecond)
+const ElectionTimeout = time.Duration(1000 * time.Millisecond)
 
-type ApplyMsg struct {
-	CommandValid bool
-	Command      interface{}
-	//必须带term，可能由于partition，发送到管道的term可能大于start后收到的term
-	CommandTerm	 int
-	CommandIndex int
-}
-
-type LogEntry struct {
-	LogIndex	int
-	Command 	interface{}
-	Term 		int
-}
-
-type serverState int
-const (
-	Follower serverState = iota
-	Candidate
-	Leader
-)
-
-type Err string
-const (
-	OK = 	"OK"
-	RPCFAIL =	"RPCFAIL"
-)
 
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -46,12 +20,12 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 
-	currentLeader 		int
+	leaderId 		int
 	state 				serverState
-	currentTerm			int
+	currentTerm		 	int
 	logIndex			int //index of next log entry to be stored, initialized to 1
 	votedFor 			int
-	Log 				[]LogEntry
+	log  				[]LogEntry
 
 	commitIndex			int
 	lastApplied			int
@@ -61,13 +35,13 @@ type Raft struct {
 	nextIndex		[]int
 	matchIndex		[]int
 	applyCh			chan ApplyMsg
-	notifyApplyMsg	chan struct{} //更新commitIndex时chan写入
+	notifyApplyCh	chan struct{} //更新commitIndex时chan写入
 	shutdown		chan struct{}
 	electionTimer	*time.Timer
 	TestFlag		bool
 }
 
-func generateRandDuration(minDuration time.Duration) time.Duration {
+func newRandDuration(minDuration time.Duration) time.Duration {
 	extra := time.Duration(rand.Int63()) % minDuration
 	return time.Duration(minDuration + extra)
 }
@@ -94,7 +68,7 @@ func (rf *Raft) getPersistState() []byte {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.lastIncludedIndex)
-	e.Encode(rf.Log)
+	e.Encode(rf.log)
 	e.Encode(rf.logIndex)
 	e.Encode(rf.commitIndex)
 	e.Encode(rf.lastApplied)
@@ -123,7 +97,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&lastIncludedIndex) != nil ||
-		d.Decode(&rf.Log) != nil ||
+		d.Decode(&rf.log) != nil ||
 		d.Decode(&logIndex) != nil ||
 		d.Decode(&commitIndex) != nil ||
 		d.Decode(&lastApplied) != nil {
@@ -142,14 +116,14 @@ func (rf *Raft) getOffsetIndex(index int) int{
 
 func (rf *Raft) getEntry(index int) LogEntry {
 	offsetIndex := rf.getOffsetIndex(index)
-	return rf.Log[offsetIndex]
+	return rf.log[offsetIndex]
 }
 
 func (rf *Raft) getRangeEntry(from, to int) []LogEntry {
 	f := rf.getOffsetIndex(from)
 	t := rf.getOffsetIndex(to)
 	//todo right?
-	return rf.Log[f:t]
+	return rf.log[f:t]
 }
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
@@ -192,11 +166,11 @@ func (rf *Raft) stepDown(term int) {
 	rf.state = Follower
 	rf.votedFor = -1
 	rf.persist()
-	rf.resetElectionTimer(generateRandDuration(electionTimeout))
+	rf.resetElectionTimer(newRandDuration(ElectionTimeout))
 }
 
 func (rf *Raft) tick() {
-	timer := time.NewTimer(broadcastTime)
+	timer := time.NewTimer(AppendEntriesInterval)
 	for {
 		select {
 		case <-timer.C:
@@ -205,7 +179,7 @@ func (rf *Raft) tick() {
 			}
 			go rf.replicate()
 			timer.Stop()
-			timer.Reset(broadcastTime)
+			timer.Reset(AppendEntriesInterval)
 		case <-rf.shutdown:
 			return
 		}
@@ -224,7 +198,7 @@ func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 		truncationStartIndex := rf.getOffsetIndex(lastCommandIndex)
 		//DPrintf("leader: before log: %v", rf.Log)
 		//snapshot后log第一条日志的index应总是等于lastIncludedIndex
-		rf.Log = append([]LogEntry{}, rf.Log[truncationStartIndex:]...)
+		rf.log = append([]LogEntry{}, rf.log[truncationStartIndex:]...)
 		rf.lastIncludedIndex = lastCommandIndex
 		//DPrintf("after log: %v. lastIncludedIndex: %v", rf.Log, rf.lastIncludedIndex)
 		state := rf.getPersistState()
@@ -243,10 +217,11 @@ func (rf *Raft) sendSnapshot(follower int) {
 	}
 
 	args := InstallSnapshotArgs{Term:rf.currentTerm, LeaderId:rf.me, LastIncludedIndex:rf.lastIncludedIndex,
-		LastIncludedTerm:rf.getEntry(rf.lastIncludedIndex).Term, Data:rf.persister.ReadSnapshot()}
+		LastIncludedTerm:rf.getEntry(rf.lastIncludedIndex).LogTerm, Data:rf.persister.ReadSnapshot()}
 	rf.mu.Unlock()
 	var reply InstallSnapshotReply
 	//不考虑失败情况
+	DPrintf("leader: %v log: %v", rf.leaderId, rf.log)
 	if rf.peers[follower].Call("Raft.InstallSnapshot", &args, &reply) {
 		rf.mu.Lock()
 		if reply.Term > rf.currentTerm {
@@ -297,13 +272,12 @@ func (rf *Raft) sendLogEntry(follower int) {
 	//DPrintf("follower: %v, rf.nextIndex: %v, prevLogIndex: %v, loglen: %v",
 	//	follower, rf.nextIndex, prevLogIndex, len(rf.log))
 	args.PrevLogIndex = prevLogIndex
-	args.PrevLogTerm = rf.getEntry(prevLogIndex).Term
-	args.LeaderCommit = rf.commitIndex
+	args.PrevLogTerm = rf.getEntry(prevLogIndex).LogTerm
+	args.CommitIndex = rf.commitIndex
+	args.Len = 0
 	if rf.logIndex > rf.nextIndex[follower] {
 		entries := rf.getRangeEntry(prevLogIndex+1, rf.logIndex)
-		args.Entries = entries
-	} else {
-		args.Entries = nil
+		args.Entries, args.Len = entries, len(entries)
 	}
 	rf.mu.Unlock()
 
@@ -327,11 +301,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 				}
 			}
 		} else {
-			entriesLen := 0
-			if args.Entries != nil {
-				entriesLen = len(args.Entries)
-			}
-			commitIndex := prevLogIndex + entriesLen
+			commitIndex := prevLogIndex + args.Len
 			//todo apply arrive in out of order时，是否正确
 			if commitIndex >= rf.nextIndex[follower] {
 				rf.nextIndex[follower] = commitIndex + 1
@@ -342,7 +312,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 			if rf.canCommit(commitIndex) {
 				rf.commitIndex = commitIndex
 				rf.persist()
-				rf.notifyApplyMsg <- struct{}{}
+				rf.notifyApplyCh <- struct{}{}
 			}
 		}
 		rf.mu.Unlock()
@@ -351,7 +321,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 }
 
 func (rf *Raft) canCommit(index int) bool {
-	if index < rf.logIndex && index > rf.commitIndex && rf.getEntry(index).Term == rf.currentTerm {
+	if index < rf.logIndex && index > rf.commitIndex && rf.getEntry(index).LogTerm == rf.currentTerm {
 		majorities, count := len(rf.peers) / 2 + 1, 0
 		for i := 0; i < len(rf.peers); i++ {
 			if rf.matchIndex[i] >= index {
@@ -377,17 +347,17 @@ func (rf *Raft) campaign() {
 	rf.votedFor = rf.me
 	//generateRandDuration(electionTimeout) always greater than electionTimeout
 	//超时则选举失败，返回
-	timer := time.After(electionTimeout)
+	timer := time.After(ElectionTimeout)
 	//DPrintf("%v start campaign. current term: %v", rf.me, rf.currentTerm)
 
-	rf.resetElectionTimer(generateRandDuration(electionTimeout))
+	rf.resetElectionTimer(newRandDuration(ElectionTimeout))
 	args := RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
 	//DPrintf("debug: log: %v, lastIncludedIndex: %v, LastLogIndex: %v", rf.Log, rf.lastIncludedIndex,
 	//	args.LastLogIndex)
-	args.LastLogTerm = rf.getEntry(args.LastLogIndex).Term
+	args.LastLogTerm = rf.getEntry(args.LastLogIndex).LogTerm
 	rf.persist()
 	rf.mu.Unlock()
 
@@ -429,7 +399,7 @@ func (rf *Raft) campaign() {
 	//todo 还需要这个if？
 	if rf.state == Candidate {
 		rf.state = Leader
-		rf.currentLeader = rf.me
+		rf.leaderId = rf.me
 		rf.reinitIndex()
 		go rf.tick()
 	}
@@ -440,14 +410,14 @@ func (rf *Raft) campaign() {
 func (rf *Raft) Replay(startIndex int) {
 	rf.mu.Lock()
 	if startIndex <= rf.lastIncludedIndex {
-		rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: rf.Log[0].LogIndex, CommandTerm: rf.Log[0].Term, Command: "InstallSnapshot"}
+		rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: rf.log[0].LogIndex, CommandTerm: rf.log[0].LogTerm, Command: "InstallSnapshot"}
 		startIndex = rf.lastIncludedIndex + 1
 		rf.lastApplied = Max(rf.lastApplied, rf.lastIncludedIndex)
 	}
-	entries := append([]LogEntry{}, rf.Log[rf.getOffsetIndex(startIndex):rf.getOffsetIndex(rf.lastApplied+1)]...)
+	entries := append([]LogEntry{}, rf.log[rf.getOffsetIndex(startIndex):rf.getOffsetIndex(rf.lastApplied+1)]...)
 	rf.mu.Unlock()
 	for i := 0; i < len(entries); i++ {
-		rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: entries[i].LogIndex, CommandTerm: entries[i].Term, Command: entries[i].Command}
+		rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: entries[i].LogIndex, CommandTerm: entries[i].LogTerm, Command: entries[i].Command}
 	}
 	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: -1, CommandTerm: -1, Command: "ReplayDone"}
 }
@@ -455,7 +425,7 @@ func (rf *Raft) Replay(startIndex int) {
 func (rf *Raft) apply() {
 	for {
 		select {
-		case <-rf.notifyApplyMsg:
+		case <-rf.notifyApplyCh:
 			//if rf.TestFlag {
 			//	DPrintf("lastApplied: %v, commitIndex: %v," +
 			//		"lastIncludedIndex: %v, logIndex: %v", rf.lastApplied, rf.commitIndex,
@@ -470,7 +440,7 @@ func (rf *Raft) apply() {
 				commandValid = false
 				rf.lastApplied = rf.lastIncludedIndex
 				entries = []LogEntry{{LogIndex:rf.lastIncludedIndex, Command:"InstallSnapshot",
-					Term:rf.Log[0].Term}}
+					LogTerm:rf.log[0].LogTerm}}
 			//todo 不考虑rf.lastApplied < rf.logIndex
 			} else if rf.lastApplied < rf.commitIndex {
 				commandValid = true
@@ -485,7 +455,7 @@ func (rf *Raft) apply() {
 			//}
 			for _, entry := range entries {
 				//DPrintf("%v apply msg %v to applyCh", rf.me, entry)
-				rf.applyCh <- ApplyMsg{CommandValid: commandValid, Command: entry.Command, CommandIndex: entry.LogIndex}
+				rf.applyCh <- ApplyMsg{CommandValid: commandValid, Command: entry.Command, CommandTerm:entry.LogTerm, CommandIndex: entry.LogIndex}
 			}
 		case <-rf.shutdown:
 			return
@@ -511,13 +481,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//rf.testFlag = true
 	index := rf.logIndex
 	term := rf.currentTerm
-	entry := LogEntry{LogIndex:index, Term:term, Command:command}
+	entry := LogEntry{LogIndex:index, LogTerm:term, Command:command}
 	//todo
 	//rf.Log = append(rf.Log, entry)
-	if offsetIndex := rf.getOffsetIndex(rf.logIndex); offsetIndex < len(rf.Log) {
-		rf.Log[offsetIndex] = entry
+	if offsetIndex := rf.getOffsetIndex(rf.logIndex); offsetIndex < len(rf.log) {
+		rf.log[offsetIndex] = entry
 	} else {
-		rf.Log = append(rf.Log, entry)
+		rf.log = append(rf.log, entry)
 	}
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
@@ -536,12 +506,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.currentLeader = -1
+	rf.leaderId = -1
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.logIndex = 1
 	rf.votedFor = -1
-	rf.Log = []LogEntry{{0, nil, 0}} //log entry at index 0 is unused
+	rf.log = []LogEntry{{0, nil, 0}} //log entry at index 0 is unused
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.lastIncludedIndex = 0
@@ -549,10 +519,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, 0)
 	rf.applyCh = applyCh
 	//todo 需要100缓冲?
-	rf.notifyApplyMsg = make(chan struct{}, 100)
+	rf.notifyApplyCh = make(chan struct{}, 100)
 	rf.shutdown = make(chan struct{})
 	rf.TestFlag = false
-	rf.electionTimer = time.NewTimer(generateRandDuration(electionTimeout))
+	rf.electionTimer = time.NewTimer(newRandDuration(ElectionTimeout))
 
 	rf.readPersist(persister.ReadRaftState())
 

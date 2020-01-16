@@ -1,47 +1,5 @@
 package raft
 
-type RequestVoteArgs struct {
-	Term			int
-	CandidateId		int
-	LastLogIndex	int
-	LastLogTerm		int
-}
-
-type RequestVoteReply struct {
-	Term 			int
-	VoteGranted		bool
-	//下面两个变量用于追踪错误原因和错误机器
-	Server 			int // which peer
-	Err 			Err
-}
-
-type AppendEntriesArgs struct {
-	Term 			int
-	LeaderId		int
-	PrevLogIndex	int
-	PrevLogTerm		int
-	Entries 		[]LogEntry
-	LeaderCommit	int
-}
-
-type AppendEntriesReply struct {
-	Term 			int
-	Success			bool
-	ConflictIndex	int
-}
-
-type InstallSnapshotArgs struct {
-	Term 				int
-	LeaderId			int
-	LastIncludedIndex	int
-	LastIncludedTerm 	int
-	Data 				[]byte
-}
-
-type InstallSnapshotReply struct {
-	Term 				int
-}
-
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -56,12 +14,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 			lastLogIndex := rf.logIndex - 1
-			lastLogTerm := rf.getEntry(lastLogIndex).Term
+			lastLogTerm := rf.getEntry(lastLogIndex).LogTerm
 			if lastLogTerm < args.LastLogTerm ||
 				(lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
 				rf.votedFor = args.CandidateId
 				rf.state = Follower
-				rf.resetElectionTimer(generateRandDuration(electionTimeout))
+				rf.resetElectionTimer(newRandDuration(ElectionTimeout))
 
 				reply.VoteGranted = true
 				reply.Term = rf.currentTerm
@@ -80,22 +38,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 
 	if rf.TestFlag {
-		DPrintf("follower %v log: %v logIndex: %v, lastIncludedIndex: %v", rf.me, rf.Log,
+		DPrintf("follower %v log: %v logIndex: %v, lastIncludedIndex: %v", rf.me, rf.log,
 			rf.logIndex, rf.lastIncludedIndex)
 	}
 	if rf.TestFlag {
 		DPrintf("Term: %v, leaderId: %v, PrevLogIndex: %v, PrevLogTerm: %v, Entries: %v," +
 			"LeaderCommit: %v", args.Term, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm,
-			args.Entries, args.LeaderCommit)
+			args.Entries, args.CommitIndex)
 	}
 	if rf.currentTerm > args.Term {
 		reply.Term, reply.Success = rf.currentTerm, false
 		return
 	}
 
-	rf.resetElectionTimer(generateRandDuration(electionTimeout))
+	rf.resetElectionTimer(newRandDuration(ElectionTimeout))
 	//DPrintf("%v reset election timer to %v", rf.me, electionTime)
-	rf.currentLeader = args.LeaderId
+	rf.leaderId = args.LeaderId
 	rf.state = Follower
 	rf.currentTerm = args.Term
 	rf.votedFor = -1
@@ -112,17 +70,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	//consistency check
 	//正常情况下logIndex = prevLogIndex + 1,即两个server日志相同，当follower日志少于leader时， logIndex <= prevLogIndex
-	if prevLogIndex >= logIndex || rf.getEntry(prevLogIndex).Term != args.PrevLogTerm {
+	if prevLogIndex >= logIndex || rf.getEntry(prevLogIndex).LogTerm != args.PrevLogTerm {
 		//当follower日志少于leader时， conflictIndex为rf.LogIndex - 1
 		//当follower日志大于leader时， conflictIndex为prevLogIndex
 		//conflictIndex总是<=args.PrevLogIndex
 		conflictIndex := Min(logIndex - 1, prevLogIndex)
-		conflictTerm := rf.getEntry(conflictIndex).Term
+		DPrintf("AppendEntries: prevLogIndex: %v, logIndex: %v, conflictIndex: %v, lastIncludedIndex: %v",
+			prevLogIndex, logIndex, conflictIndex, rf.lastIncludedIndex)
+		DPrintf("AppendEntries: log: %v", rf.log)
+		conflictTerm := rf.getEntry(conflictIndex).LogTerm
 		//todo 什么情况下rf.lastIncludedIndex > rf.commitIndex
 		floor := Max(rf.commitIndex, rf.lastIncludedIndex)
-		for ; conflictTerm > floor && rf.getEntry(conflictIndex-1).Term == conflictTerm; conflictIndex-- {
+		for ; conflictTerm > floor && rf.getEntry(conflictIndex-1).LogTerm == conflictTerm; conflictIndex-- {
 		}
-		DPrintf("prevLogIndex: %v, logIndex: %v", prevLogIndex, logIndex)
+		//DPrintf("prevLogIndex: %v, logIndex: %v", prevLogIndex, logIndex)
 		reply.Success, reply.Term, reply.ConflictIndex = false, args.Term, conflictIndex
 		return
 	}
@@ -137,26 +98,58 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 		//代表不匹配情况，找到不匹配位置删除然后跳出
-		if rf.getEntry(prevLogIndex + 1 + i).Term != args.Entries[i].Term {
+		if rf.getEntry(prevLogIndex + 1 + i).LogIndex != args.Entries[i].LogIndex {
 			rf.logIndex = prevLogIndex + 1 + i
 			truncationIndex := rf.getOffsetIndex(rf.logIndex)
-			rf.Log = rf.Log[:truncationIndex]
+			rf.log = rf.log[:truncationIndex]
 			break
 		}
 	}
 	for ; i < len(args.Entries); i++ {
-		rf.Log = append(rf.Log, args.Entries[i])
+		rf.log = append(rf.log, args.Entries[i])
 		rf.logIndex += 1
 	}
 
 	oldCommitIndex := rf.commitIndex
-	rf.commitIndex = Min(args.LeaderCommit, rf.logIndex - 1)
+	rf.commitIndex = Min(args.CommitIndex, rf.logIndex - 1)
 	if oldCommitIndex < rf.commitIndex {
-		rf.notifyApplyMsg <- struct{}{}
+		rf.notifyApplyCh <- struct{}{}
 	}
 	rf.persist()
 }
 
+//func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+//	rf.mu.Lock()
+//	defer rf.mu.Unlock()
+//	reply.Err = OK
+//	reply.Term = rf.currentTerm
+//	if args.Term < rf.currentTerm {
+//		DPrintf("InstallSnapshot: args.Term: %v < rf.currentTerm: %v," +
+//			"return", args.Term, rf.currentTerm)
+//		return
+//	}
+//	rf.leaderId = args.LeaderId
+//	if args.LastIncludedIndex > rf.lastIncludedIndex {
+//		truncationStartIndex := rf.getOffsetIndex(args.LastIncludedIndex)
+//		rf.lastIncludedIndex = args.LastIncludedIndex
+//		oldCommitIndex := rf.commitIndex
+//		rf.commitIndex = Max(rf.commitIndex, rf.lastIncludedIndex)
+//		rf.logIndex = Max(rf.logIndex, rf.lastIncludedIndex+1)
+//		//DPrintf("InstallSnapshot. before log: %v", rf.log)
+//		if truncationStartIndex < len(rf.log) { // snapshot contain a prefix of its log
+//			rf.log = append(rf.log[truncationStartIndex:])
+//		} else { // snapshot contain new information not already in the follower's log
+//			rf.log = []LogEntry{{args.LastIncludedIndex, nil, args.LastIncludedTerm}} // discards entire log
+//		}
+//		//DPrintf("InstallSnapshot. after log: %v", rf.log)
+//		rf.persister.SaveStateAndSnapshot(rf.getPersistState(), args.Data)
+//		if rf.commitIndex > oldCommitIndex {
+//			rf.notifyApplyCh <- struct{}{}
+//		}
+//	}
+//	rf.resetElectionTimer(newRandDuration(ElectionTimeout))
+//	rf.persist()
+//}
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
@@ -166,28 +159,35 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	if args.Term < rf.currentTerm {
 		return
 	}
-	rf.currentLeader = args.LeaderId
+	rf.leaderId = args.LeaderId
 	if rf.lastIncludedIndex < args.LastIncludedIndex {
 		truncationStartIndex := rf.getOffsetIndex(args.LastIncludedIndex)
 		rf.lastIncludedIndex = args.LastIncludedIndex
 		oldCommitIndex := rf.commitIndex
-		rf.commitIndex = rf.lastIncludedIndex
-		rf.logIndex = rf.lastIncludedIndex + 1
+
+		//可能会出现rf.commitIndex > rf.lastIncludedIndex 或 rf.logIndex > rf.lastIncludedIndex+1的情况
+		//leader:   16, 17
+		//follower: 09, 10,...,16, 17
+		//此时leader: lastIncludedIndex: 16
+		//此时follower: commitIndex: 16, logIndex: 18, lastIncludedIndex: 09
+		//此时rf.lastIncludedIndex+1(17) < rf.logIndex(18)
+		rf.commitIndex = Max(rf.commitIndex, rf.lastIncludedIndex)
+		rf.logIndex = Max(rf.logIndex, rf.lastIncludedIndex+1)
 		//正常情况下truncationStartIndex 应该>=len(rf.log),小于则说明truncationStartIndex以后的日志都是最近加入的
 		//DPrintf("InstallSnapshot. before log: %v", rf.Log)
-		if truncationStartIndex < len(rf.Log) {
-			rf.Log = rf.Log[truncationStartIndex:]
+		if truncationStartIndex < len(rf.log) {
+			rf.log = rf.log[truncationStartIndex:]
 		} else {
 			//todo
 			//rf.Log = []LogEntry{{0, nil, 0}}
-			rf.Log = []LogEntry{{args.LastIncludedIndex, nil, args.LastIncludedTerm}}
+			rf.log = []LogEntry{{args.LastIncludedIndex, nil, args.LastIncludedTerm}}
 		}
 		//DPrintf("InstallSnapshot. after log: %v", rf.Log)
 		rf.persister.SaveStateAndSnapshot(rf.getPersistState(), args.Data)
 		if oldCommitIndex < rf.commitIndex {
-			rf.notifyApplyMsg <- struct{}{}
+			rf.notifyApplyCh <- struct{}{}
 		}
 	}
-	rf.resetElectionTimer(generateRandDuration(electionTimeout))
+	rf.resetElectionTimer(newRandDuration(ElectionTimeout))
 	rf.persist()
 }

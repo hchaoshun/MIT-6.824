@@ -496,14 +496,14 @@ func TestOnePartition3A(t *testing.T) {
 	ck := cfg.makeClient(cfg.All())
 
 	DPrintf("before: all server log:")
-	for i, kvs := range cfg.kvservers {
-		DPrintf("%v, %v", i, kvs.rf.Log)
-	}
+	//for i, kvs := range cfg.kvservers {
+	//	DPrintf("%v, %v", i, kvs.rf.Log)
+	//}
 	Put(cfg, ck, "1", "13")
 	DPrintf("after put 1->13:")
-	for i, kvs := range cfg.kvservers {
-		DPrintf("%v, %v", i, kvs.rf.Log)
-	}
+	//for i, kvs := range cfg.kvservers {
+	//	DPrintf("%v, %v", i, kvs.rf.Log)
+	//}
 
 	cfg.begin("Test: progress in majority (3A)")
 
@@ -518,9 +518,9 @@ func TestOnePartition3A(t *testing.T) {
 	Put(cfg, ckp1, "1", "14")
 	check(cfg, t, ckp1, "1", "14")
 	DPrintf("after ckp1 put 1->14:")
-	for i, kvs := range cfg.kvservers {
-		DPrintf("%v, %v", i, kvs.rf.Log)
-	}
+	//for i, kvs := range cfg.kvservers {
+	//	DPrintf("%v, %v", i, kvs.rf.Log)
+	//}
 
 	cfg.end()
 
@@ -534,17 +534,17 @@ func TestOnePartition3A(t *testing.T) {
 		Put(cfg, ckp2a, "1", "15")
 		//网络分区恢复以后才会执行
 		DPrintf("after ckp2a put 1->15:")
-		for i, kvs := range cfg.kvservers {
-			DPrintf("%v, %v", i, kvs.rf.Log)
-		}
+		//for i, kvs := range cfg.kvservers {
+		//	DPrintf("%v, %v", i, kvs.rf.Log)
+		//}
 		done0 <- true
 	}()
 	go func() {
 		Get(cfg, ckp2b, "1") // different clerk in p2
 		DPrintf("after ckp2b get 1:")
-		for i, kvs := range cfg.kvservers {
-			DPrintf("%v, %v", i, kvs.rf.Log)
-		}
+		//for i, kvs := range cfg.kvservers {
+		//	DPrintf("%v, %v", i, kvs.rf.Log)
+		//}
 		done1 <- true
 	}()
 
@@ -564,9 +564,9 @@ func TestOnePartition3A(t *testing.T) {
 	check(cfg, t, ckp1, "1", "16")
 
 	DPrintf("after ckp1 put 1->16:")
-	for i, kvs := range cfg.kvservers {
-		DPrintf("%v, %v", i, kvs.rf.Log)
-	}
+	//for i, kvs := range cfg.kvservers {
+	//	DPrintf("%v, %v", i, kvs.rf.Log)
+	//}
 
 	cfg.end()
 

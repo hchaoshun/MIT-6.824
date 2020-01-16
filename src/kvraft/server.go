@@ -10,15 +10,6 @@ import (
 	"time"
 )
 
-const Debug = 0
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
-
 //必须注册，否则报空指针异常
 func init() {
 	labgob.Register(GetArgs{})
@@ -105,6 +96,7 @@ func (kv *KVServer) Start(command interface{}) (Err, string) {
 	kv.Unlock()
 	select {
 	case msg := <-notifyCh:
+		DPrintf("start term: %v， index: %v, received: %v", term, index, msg)
 		//当出现partition的时候，start发送command的leader可能是partition后原来的leader(此leader的term小于真正的leader term）
 		//此leader stepdown,index位置的command和term被真正的leader重写。即term < msg.Term
 		if msg.Term != term {

@@ -1,6 +1,9 @@
 package raftkv
 
-import "time"
+import (
+	"log"
+	"time"
+)
 
 type Err string
 const (
@@ -10,6 +13,15 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrTimeout = "ErrTimeout"
 )
+
+const Debug = 0
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug > 0 {
+		log.Printf(format, a...)
+	}
+	return
+}
 
 const StartTimeoutInterval = time.Duration(3 * time.Second)
 
