@@ -26,7 +26,6 @@ func init() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
@@ -34,6 +33,7 @@ type Op struct {
 }
 
 type NotifyMsg struct {
+	Term 		int
 	Err         Err
 	Value       string
 }
@@ -86,26 +86,32 @@ func(kv *KVServer) snapshotIfNeed(lastCommandIndex int) {
 
 func (kv *KVServer) notifyIfPresent(index int, reply NotifyMsg) {
 	if ch, ok := kv.notifyChanMap[index]; ok {
-		DPrintf("send to notifyCh. %v, %v", index, reply)
+		//DPrintf("send to notifyCh. %v, %v", index, reply)
 		ch <- reply
 		delete(kv.notifyChanMap, index)
 	}
 }
 
 func (kv *KVServer) Start(command interface{}) (Err, string) {
-	//todo
-	index, _, ok := kv.rf.Start(command)
+	//立即返回
+	index, term, ok := kv.rf.Start(command)
 	if !ok {
 		return ErrWrongLeader, ""
 	}
 	kv.Lock()
+	//TODO 缓冲足够?
 	notifyCh := make(chan NotifyMsg)
 	kv.notifyChanMap[index] = notifyCh
 	kv.Unlock()
 	select {
 	case msg := <-notifyCh:
-		DPrintf("received: %v", msg)
-		return msg.Err, msg.Value
+		//当出现partition的时候，start发送command的leader可能是partition后原来的leader(此leader的term小于真正的leader term）
+		//此leader stepdown,index位置的command和term被真正的leader重写。即term < msg.Term
+		if msg.Term != term {
+			return ErrWrongLeader, ""
+		} else {
+			return msg.Err, msg.Value
+		}
 	//必须设置超时，否则会永久阻塞
 	//超时原因可能是由于网络分区没有得到majority同意
 	case <-time.After(StartTimeoutInterval):
@@ -124,33 +130,26 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("put key: %v, value: %v", args.Key, args.Value)
-	if args.Key == "c" {
-		kv.rf.TestFlag = true
-	}
 	reply.Err, _ = kv.Start(args.copy())
 }
 
-//
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. you are not required to do anything
-// in Kill(), but it might be convenient to (for example)
-// turn off debug output from this instance.
-//
+
 func (kv *KVServer) Kill() {
 	kv.rf.Kill()
-	// Your code here, if desired.
+	close(kv.shutdown)
 }
 
 func(kv *KVServer) apply(msg raft.ApplyMsg) {
-	result := NotifyMsg{Err:"OK", Value:""}
+	result := NotifyMsg{Term:msg.CommandTerm, Err:"OK", Value:""}
 	if arg, ok := msg.Command.(GetArgs); ok {
 		//读操作没必要缓存和检查是否是上次retry
 		result.Value = kv.data[arg.Key]
 	} else if arg, ok := msg.Command.(PutAppendArgs); ok {
+		//条件不成立说明已经发送过
 		if kv.cache[arg.ClientId] < arg.RequestSeq {
 			if arg.Op == "Put" {
 				kv.data[arg.Key] = arg.Value
-			} else if arg.Op == "Append" {
+			} else {
 				kv.data[arg.Key] += arg.Value
 			}
 			kv.cache[arg.ClientId] = arg.RequestSeq
@@ -164,13 +163,16 @@ func(kv *KVServer) apply(msg raft.ApplyMsg) {
 }
 
 func(kv *KVServer) run() {
-	//go kv.rf.Replay(1)
+	//todo
+	go kv.rf.Replay(1)
 	for {
 		select {
-		//从raft返回的消息
+		//从raft返回的消息,此消息可能是leader send log majority后接收
+		//也可能是InstallSnapshot后接收
 		case msg := <-kv.applyCh:
+			kv.Lock()
 			//接收到此消息一定是leader
-			//DPrintf("%v applyCh received %v", kv.me, msg)
+			DPrintf("%v applyCh received %v", kv.me, msg)
 			if msg.CommandValid {
 				DPrintf("call apply. commandIndex: %v", msg.CommandIndex)
 				kv.apply(msg)
@@ -178,7 +180,9 @@ func(kv *KVServer) run() {
 				if cmd == "InstallSnapshot" {
 					kv.readSnapshot()
 				}
+				//todo newleader?
 			}
+			kv.Unlock()
 		case <-kv.shutdown:
 			return
 		}
@@ -198,7 +202,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.cache = make(map[int64]int)
 
 	kv.persister = persister
-	kv.applyCh = make(chan raft.ApplyMsg)
+	//todo 为什么需要1000缓冲?
+	kv.applyCh = make(chan raft.ApplyMsg, 1000)
 	kv.notifyChanMap = make(map[int]chan NotifyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 

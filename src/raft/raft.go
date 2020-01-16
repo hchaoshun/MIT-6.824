@@ -16,8 +16,8 @@ const electionTimeout = time.Duration(1000 * time.Millisecond)
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
-	//todo need?
-	//CommandTerm	 int
+	//必须带term，可能由于partition，发送到管道的term可能大于start后收到的term
+	CommandTerm	 int
 	CommandIndex int
 }
 
@@ -93,6 +93,7 @@ func (rf *Raft) getPersistState() []byte {
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
+	e.Encode(rf.lastIncludedIndex)
 	e.Encode(rf.Log)
 	e.Encode(rf.logIndex)
 	e.Encode(rf.commitIndex)
@@ -115,12 +116,13 @@ func (rf *Raft) readPersist(data []byte) {
 
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	currentTerm, votedFor, logIndex, commitIndex, lastApplied := 0, 0, 0, 0, 0
+	currentTerm, votedFor, lastIncludedIndex, logIndex, commitIndex, lastApplied := 0, 0, 0, 0, 0, 0
 	//n1, n2, n3, n4, n5, n6 := d.Decode(&currentTerm), d.Decode(&votedFor), d.Decode(&logIndex),
 	//	d.Decode(&commitIndex), d.Decode(&lastApplied), d.Decode(&rf.log)
 	//DPrintf("%v, %v, %v, %v, %v, %v", n1, n2, n3, n4, n5, n6)
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
+		d.Decode(&lastIncludedIndex) != nil ||
 		d.Decode(&rf.Log) != nil ||
 		d.Decode(&logIndex) != nil ||
 		d.Decode(&commitIndex) != nil ||
@@ -128,8 +130,8 @@ func (rf *Raft) readPersist(data []byte) {
 		//DPrintf("%v, %v, %v, %v, %v, %v", currentTerm, votedFor, logIndex, commitIndex, lastApplied, rf.log)
 		log.Fatal("error while unmarshal raft state.")
 	}
-	rf.currentTerm, rf.votedFor, rf.logIndex, rf.commitIndex, rf.lastApplied =
-		currentTerm, votedFor, logIndex, commitIndex, lastApplied
+	rf.currentTerm, rf.votedFor, rf.lastIncludedIndex, rf.logIndex, rf.commitIndex, rf.lastApplied =
+		currentTerm, votedFor, lastIncludedIndex, logIndex, commitIndex, lastApplied
 }
 
 //snapshot后会更新logIndex/commitIndex/nextIndex/matchIndex，都为log的相对位置(都远远大于len(log))
@@ -161,7 +163,10 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) Kill() {
-	//todo
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.state = Follower
+	close(rf.shutdown)
 }
 
 func (rf *Raft) solicit(i int, args *RequestVoteArgs, replyCh chan<- RequestVoteReply) {
@@ -209,9 +214,9 @@ func (rf *Raft) tick() {
 
 //lastIncludedIndex用ApplyMsg 里的CommandIndex更新,总是位于snapshot后的第一个index
 func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
-	if rf.TestFlag {
-		DPrintf("start PersistAndSaveSnapshot. commandIndex: %v", lastCommandIndex)
-	}
+	//if rf.TestFlag {
+	//	DPrintf("start PersistAndSaveSnapshot. commandIndex: %v", lastCommandIndex)
+	//}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if lastCommandIndex > rf.lastIncludedIndex {
@@ -225,9 +230,9 @@ func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 		state := rf.getPersistState()
 		rf.persister.SaveStateAndSnapshot(state, snapshot)
 	}
-	if rf.TestFlag {
-		DPrintf("finish PersistAndSaveSnapshot. commandIndex: %v", lastCommandIndex)
-	}
+	//if rf.TestFlag {
+	//	DPrintf("finish PersistAndSaveSnapshot. commandIndex: %v", lastCommandIndex)
+	//}
 }
 
 func (rf *Raft) sendSnapshot(follower int) {
@@ -308,12 +313,13 @@ func (rf *Raft) sendLogEntry(follower int) {
 		rf.mu.Lock()
 		if !reply.Success {
 			if reply.Term > rf.currentTerm {
+				//可能由于partition currentTerm已不是最新
 				rf.stepDown(reply.Term)
 			} else {
 				//retry
 				rf.nextIndex[follower] = Max(1, reply.ConflictIndex)
-				DPrintf("retry rf.nextIndex: %v, confilict: %v",
-					rf.nextIndex[follower], reply.ConflictIndex)
+				//DPrintf("retry rf.nextIndex: %v, confilict: %v",
+				//	rf.nextIndex[follower], reply.ConflictIndex)
 				go rf.sendLogEntry(follower)
 				//更新nextIndex，需要判断是否需要发送snapshot rpc
 				if rf.nextIndex[follower] <= rf.lastIncludedIndex {
@@ -327,8 +333,10 @@ func (rf *Raft) sendLogEntry(follower int) {
 			}
 			commitIndex := prevLogIndex + entriesLen
 			//todo apply arrive in out of order时，是否正确
-			rf.nextIndex[follower] = commitIndex + 1
-			rf.matchIndex[follower] = commitIndex
+			if commitIndex >= rf.nextIndex[follower] {
+				rf.nextIndex[follower] = commitIndex + 1
+				rf.matchIndex[follower] = commitIndex
+			}
 
 			//必须要majority之后才能提交
 			if rf.canCommit(commitIndex) {
@@ -377,6 +385,8 @@ func (rf *Raft) campaign() {
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
 	args.LastLogIndex = rf.logIndex - 1
+	//DPrintf("debug: log: %v, lastIncludedIndex: %v, LastLogIndex: %v", rf.Log, rf.lastIncludedIndex,
+	//	args.LastLogIndex)
 	args.LastLogTerm = rf.getEntry(args.LastLogIndex).Term
 	rf.persist()
 	rf.mu.Unlock()
@@ -413,7 +423,7 @@ func (rf *Raft) campaign() {
 			}
 		}
 	}
-	DPrintf("server %d win the election, current term: %v", rf.me, rf.currentTerm)
+	//DPrintf("server %d win the election, current term: %v", rf.me, rf.currentTerm)
 
 	rf.mu.Lock()
 	//todo 还需要这个if？
@@ -427,20 +437,20 @@ func (rf *Raft) campaign() {
 }
 
 //todo test
-//func (rf *Raft) Replay(startIndex int) {
-//	rf.mu.Lock()
-//	if startIndex <= rf.lastIncludedIndex {
-//		rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: rf.Log[0].LogIndex, CommandTerm: rf.Log[0].Term, Command: "InstallSnapshot"}
-//		startIndex = rf.lastIncludedIndex + 1
-//		rf.lastApplied = Max(rf.lastApplied, rf.lastIncludedIndex)
-//	}
-//	entries := append([]LogEntry{}, rf.Log[rf.getOffsetIndex(startIndex):rf.getOffsetIndex(rf.lastApplied+1)]...)
-//	rf.mu.Unlock()
-//	for i := 0; i < len(entries); i++ {
-//		rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: entries[i].LogIndex, CommandTerm: entries[i].Term, Command: entries[i].Command}
-//	}
-//	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: -1, CommandTerm: -1, Command: "ReplayDone"}
-//}
+func (rf *Raft) Replay(startIndex int) {
+	rf.mu.Lock()
+	if startIndex <= rf.lastIncludedIndex {
+		rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: rf.Log[0].LogIndex, CommandTerm: rf.Log[0].Term, Command: "InstallSnapshot"}
+		startIndex = rf.lastIncludedIndex + 1
+		rf.lastApplied = Max(rf.lastApplied, rf.lastIncludedIndex)
+	}
+	entries := append([]LogEntry{}, rf.Log[rf.getOffsetIndex(startIndex):rf.getOffsetIndex(rf.lastApplied+1)]...)
+	rf.mu.Unlock()
+	for i := 0; i < len(entries); i++ {
+		rf.applyCh <- ApplyMsg{CommandValid: true, CommandIndex: entries[i].LogIndex, CommandTerm: entries[i].Term, Command: entries[i].Command}
+	}
+	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: -1, CommandTerm: -1, Command: "ReplayDone"}
+}
 
 func (rf *Raft) apply() {
 	for {
@@ -461,6 +471,7 @@ func (rf *Raft) apply() {
 				rf.lastApplied = rf.lastIncludedIndex
 				entries = []LogEntry{{LogIndex:rf.lastIncludedIndex, Command:"InstallSnapshot",
 					Term:rf.Log[0].Term}}
+			//todo 不考虑rf.lastApplied < rf.logIndex
 			} else if rf.lastApplied < rf.commitIndex {
 				commandValid = true
 				entries = rf.getRangeEntry(rf.lastApplied+1, rf.commitIndex+1)
@@ -469,10 +480,9 @@ func (rf *Raft) apply() {
 			rf.persist()
 			rf.mu.Unlock()
 
-			if rf.TestFlag {
-				DPrintf("entries: %v", entries)
-			}
-			//todo CommandValid == false 的情况？
+			//if rf.TestFlag {
+			//	DPrintf("entries: %v", entries)
+			//}
 			for _, entry := range entries {
 				//DPrintf("%v apply msg %v to applyCh", rf.me, entry)
 				rf.applyCh <- ApplyMsg{CommandValid: commandValid, Command: entry.Command, CommandIndex: entry.LogIndex}
@@ -487,12 +497,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if rf.TestFlag {
-		DPrintf("Start command: %v", command)
-	}
+	//if rf.TestFlag {
+	//	DPrintf("Start command: %v", command)
+	//}
 	//DPrintf("follower rf: %v", *rf)
+	//即使通过此条件rf.me也不一定是leader，可能是上一个term的leader，由于partition已经有新的leader产生，
+	//此时rf.currentTerm小于leader的term
 	if rf.state != Leader {
-		DPrintf("raft: sorry, %v is not leader, leader: %v", rf.me, rf.currentLeader)
+		//DPrintf("raft: sorry, %v is not leader, leader: %v", rf.me, rf.currentLeader)
 		return -1, -1, false
 	}
 
@@ -500,13 +512,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := rf.logIndex
 	term := rf.currentTerm
 	entry := LogEntry{LogIndex:index, Term:term, Command:command}
-	rf.Log = append(rf.Log, entry)
+	//todo
+	//rf.Log = append(rf.Log, entry)
+	if offsetIndex := rf.getOffsetIndex(rf.logIndex); offsetIndex < len(rf.Log) {
+		rf.Log[offsetIndex] = entry
+	} else {
+		rf.Log = append(rf.Log, entry)
+	}
 	rf.matchIndex[rf.me] = index
 	rf.logIndex += 1
 	rf.persist()
-	if rf.TestFlag {
-		DPrintf("leader %v log: %v lastIncludedIndex: %v",rf.me, rf.Log, rf.lastIncludedIndex)
-	}
+	//if rf.TestFlag {
+	//	DPrintf("leader %v log: %v lastIncludedIndex: %v",rf.me, rf.Log, rf.lastIncludedIndex)
+	//}
 	go rf.replicate()
 
 	return index, term, true
