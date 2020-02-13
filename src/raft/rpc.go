@@ -81,6 +81,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		conflictTerm := rf.getEntry(conflictIndex).LogTerm
 		//todo 什么情况下rf.lastIncludedIndex > rf.commitIndex
 		floor := Max(rf.commitIndex, rf.lastIncludedIndex)
+		//过滤相同的conflictTerm
 		for ; conflictTerm > floor && rf.getEntry(conflictIndex-1).LogTerm == conflictTerm; conflictIndex-- {
 		}
 		//DPrintf("prevLogIndex: %v, logIndex: %v", prevLogIndex, logIndex)
@@ -92,8 +93,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	var i = 0
 	//补全缺失或错误的log
 	//正常情况下for只会执行一次
+	//todo for 循环能不能用if代替?
 	for ; i < len(args.Entries); i++ {
-		//代表缺失情况，找到缺失位置跳出
+		//代表缺失情况(follower日志少于leader)，找到缺失位置跳出
 		if prevLogIndex + 1 + i >= logIndex {
 			break
 		}

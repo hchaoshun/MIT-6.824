@@ -32,6 +32,7 @@ type Raft struct {
 	lastIncludedIndex 	int //snapshot最后的index， 初始化为0
 
 	//每次选举成功nextIndex都重新初始化为logIndex，所以Leader的nextIndex总是>=follower的logIndex
+	//正常情况下matchIndex 应等于nextIndex - 1
 	nextIndex		[]int
 	matchIndex		[]int
 	applyCh			chan ApplyMsg
@@ -209,6 +210,7 @@ func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 	//}
 }
 
+//当rf.nextIndex[follower] <= rf.lastIncludedIndex时，会调用
 func (rf *Raft) sendSnapshot(follower int) {
 	rf.mu.Lock()
 	if rf.state != Leader {
@@ -422,6 +424,7 @@ func (rf *Raft) Replay(startIndex int) {
 	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: -1, CommandTerm: -1, Command: "ReplayDone"}
 }
 
+//将ApplyMsg发送到applyCh，即apply log to state machine操作
 func (rf *Raft) apply() {
 	for {
 		select {

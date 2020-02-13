@@ -18,9 +18,7 @@ func init() {
 }
 
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+
 }
 
 type NotifyMsg struct {
