@@ -28,6 +28,15 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+func (conf *Config) copy() Config {
+	newConf := Config{Num:conf.Num, Shards:conf.Shards, Groups:make(map[int][]string)}
+	for gid, servers := range conf.Groups {
+		//todo 不用append是否正确
+		newConf.Groups[gid] = servers
+	}
+	return newConf
+}
+
 const (
 	OK = "OK"
 )
@@ -38,6 +47,14 @@ type JoinArgs struct {
 	Servers map[int][]string // new GID -> servers mappings
 }
 
+func (arg *JoinArgs) copy() JoinArgs {
+	newArgs := JoinArgs{Servers:make(map[int][]string)}
+	for gid, servers := range arg.Servers {
+		newArgs.Servers[gid] = servers
+	}
+	return newArgs
+}
+
 type JoinReply struct {
 	WrongLeader bool
 	Err         Err
@@ -45,6 +62,11 @@ type JoinReply struct {
 
 type LeaveArgs struct {
 	GIDs []int
+}
+
+func (arg *LeaveArgs) copy() LeaveArgs {
+	newArgs := LeaveArgs{GIDs:arg.GIDs}
+	return newArgs
 }
 
 type LeaveReply struct {
@@ -57,6 +79,10 @@ type MoveArgs struct {
 	GID   int
 }
 
+func (arg *MoveArgs) copy() MoveArgs {
+	return MoveArgs{Shard:arg.Shard, GID:arg.GID}
+}
+
 type MoveReply struct {
 	WrongLeader bool
 	Err         Err
@@ -64,6 +90,10 @@ type MoveReply struct {
 
 type QueryArgs struct {
 	Num int // desired config number
+}
+
+func (arg *QueryArgs) copy() QueryArgs {
+	return QueryArgs{Num:arg.Num}
 }
 
 type QueryReply struct {
