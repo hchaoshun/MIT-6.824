@@ -1,11 +1,22 @@
 package shardmaster
 
 
-import "raft"
+import (
+	"log"
+	"raft"
+)
 import "labrpc"
 import "sync"
 import "labgob"
 
+//必须注册，否则报空指针异常
+func init() {
+	labgob.Register(JoinArgs{})
+	labgob.Register(LeaveArgs{})
+	labgob.Register(MoveArgs{})
+	labgob.Register(QueryArgs{})
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+}
 
 type ShardMaster struct {
 	mu      sync.Mutex

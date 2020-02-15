@@ -44,7 +44,9 @@ const (
 type Err string
 
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	clientId		int64
+	requestSeq		int
+	Servers 		map[int][]string // new GID -> servers mappings
 }
 
 func (arg *JoinArgs) copy() JoinArgs {
@@ -61,7 +63,9 @@ type JoinReply struct {
 }
 
 type LeaveArgs struct {
-	GIDs []int
+	clientId		int64
+	requestSeq		int
+	GIDs 			[]int
 }
 
 func (arg *LeaveArgs) copy() LeaveArgs {
@@ -75,8 +79,10 @@ type LeaveReply struct {
 }
 
 type MoveArgs struct {
-	Shard int
-	GID   int
+	clientId		int64
+	requestSeq		int
+	Shard 			int
+	GID   			int
 }
 
 func (arg *MoveArgs) copy() MoveArgs {
