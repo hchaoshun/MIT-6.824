@@ -38,7 +38,7 @@ type KVServer struct {
 	shutdown 		chan struct{}
 	data			map[string]string
 	cache			map[int64]int
-	notifyChanMap 	map[int]chan NotifyMsg
+	notifyChanMap 	map[int]chan NotifyMsg // map的key是applyCh返回的CommandIndex
 }
 
 func (kv *KVServer) snapshot(lastCommandIndex int) {

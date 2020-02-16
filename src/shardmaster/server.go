@@ -18,6 +18,12 @@ func init() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 }
 
+type NotifyArg struct {
+	Term		int
+	Value		string
+	Err 		Err
+}
+
 type ShardMaster struct {
 	sync.Mutex
 	me      		int
@@ -29,10 +35,11 @@ type ShardMaster struct {
 	configs 		[]Config // indexed by config num
 }
 
-type NotifyArg struct {
-	Term		int
-	Value		string
-	Err 		Err
+func (sm *ShardMaster) notifyIfPresent(index int, reply NotifyArg) {
+	if ch, ok := sm.notifyChanMap[index]; ok {
+		ch <- reply
+	}
+	delete(sm.notifyChanMap, index)
 }
 
 type Op struct {
@@ -73,12 +80,28 @@ func (sm *ShardMaster) Raft() *raft.Raft {
 	return sm.rf
 }
 
-//
-// servers[] contains the ports of the set of
-// servers that will cooperate via Paxos to
-// form the fault-tolerant shardmaster service.
-// me is the index of the current server in servers[].
-//
+func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
+	result := NotifyArg{Term:msg.CommandTerm, Err:OK, Value:""}
+	//todo handle msg.Command
+	sm.notifyIfPresent(msg.CommandIndex, result)
+}
+
+func (sm *ShardMaster) run() {
+	for {
+		select {
+		case msg := <-sm.applyCh:
+			sm.Lock()
+			if msg.CommandValid {
+				sm.apply(msg)
+			}
+			//todo else ?
+			sm.Unlock()
+		case <-sm.shutdown:
+			return
+		}
+	}
+}
+
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardMaster {
 	sm := new(ShardMaster)
 	sm.me = me
@@ -87,10 +110,13 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.configs[0].Groups = map[int][]string{}
 
 	labgob.Register(Op{})
+	//todo 缓冲是否足够?
 	sm.applyCh = make(chan raft.ApplyMsg)
 	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
+	sm.cache = make(map[int64]int)
+	sm.shutdown = make(chan struct{})
+	sm.notifyChanMap = make(map[int]chan NotifyArg)
 
-	// Your code here.
-
+	go sm.run()
 	return sm
 }
