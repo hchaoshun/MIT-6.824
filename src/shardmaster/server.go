@@ -4,6 +4,7 @@ package shardmaster
 import (
 	"log"
 	"raft"
+	"time"
 )
 import "labrpc"
 import "sync"
@@ -16,6 +17,10 @@ func init() {
 	labgob.Register(MoveArgs{})
 	labgob.Register(QueryArgs{})
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+}
+
+type Op struct {
+	// Your data here.
 }
 
 type NotifyArg struct {
@@ -42,21 +47,43 @@ func (sm *ShardMaster) notifyIfPresent(index int, reply NotifyArg) {
 	delete(sm.notifyChanMap, index)
 }
 
-type Op struct {
-	// Your data here.
+func (sm *ShardMaster) start(command interface{}) (Err, string) {
+	index, term, ok := sm.rf.Start(command)
+	if !ok {
+		return WrongLeader, ""
+	}
+	sm.Lock()
+	notifyCh := make(chan NotifyArg)
+	sm.notifyChanMap[index] = notifyCh
+	sm.Unlock()
+
+	select {
+	case msg := <- notifyCh:
+		if msg.Term != term {
+			return WrongLeader, ""
+		} else {
+			//todo 返回空?
+			return OK, ""
+		}
+	//todo 时间合并
+	case <-time.After(time.Duration(3 * time.Second)):
+		sm.Lock()
+		delete(sm.notifyChanMap, index)
+		sm.Unlock()
+		return Timeout, ""
+	}
 }
 
-
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
-	// Your code here.
+	reply.Err, _ = sm.start(args.copy())
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
-	// Your code here.
+	reply.Err, _ = sm.start(args.copy())
 }
 
 func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
-	// Your code here.
+	reply.Err, _ = sm.start(args.copy())
 }
 
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {

@@ -37,10 +37,12 @@ func (conf *Config) copy() Config {
 	return newConf
 }
 
+//todo 和kvraft合并
 type Err string
 const (
 	OK = "OK"
 	WrongLeader = "WrongLeader"
+	Timeout = "ErrTimeout"
 )
 
 type JoinArgs struct {
