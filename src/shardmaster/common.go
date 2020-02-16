@@ -37,11 +37,11 @@ func (conf *Config) copy() Config {
 	return newConf
 }
 
+type Err string
 const (
 	OK = "OK"
+	WrongLeader = "WrongLeader"
 )
-
-type Err string
 
 type JoinArgs struct {
 	ClientId		int64

@@ -19,16 +19,21 @@ func init() {
 }
 
 type ShardMaster struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-
-	// Your data here.
-
-	configs []Config // indexed by config num
+	sync.Mutex
+	me      		int
+	rf      		*raft.Raft
+	applyCh 		chan raft.ApplyMsg
+	shutdown		chan struct{}
+	cache			map[int64]int
+	notifyChanMap	map[int]chan NotifyArg
+	configs 		[]Config // indexed by config num
 }
 
+type NotifyArg struct {
+	Term		int
+	Value		string
+	Err 		Err
+}
 
 type Op struct {
 	// Your data here.
