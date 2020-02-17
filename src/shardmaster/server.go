@@ -115,13 +115,11 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	}
 }
 
+func (sm *ShardMaster) appendNewConfig(config Config) {
+	config.Num = len(sm.configs)
+	sm.configs = append(sm.configs, config)
+}
 
-//
-// the tester calls Kill() when a ShardMaster instance won't
-// be needed again. you are not required to do anything
-// in Kill(), but it might be convenient to (for example)
-// turn off debug output from this instance.
-//
 func (sm *ShardMaster) Kill() {
 	sm.rf.Kill()
 	// Your code here, if desired.
@@ -134,8 +132,15 @@ func (sm *ShardMaster) Raft() *raft.Raft {
 
 func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 	result := NotifyArg{Term:msg.CommandTerm, Err:OK, Value:""}
-	if args, ok := msg.Command.(QueryArgs); ok {
-		result.Value = sm.getConfig(args.Num)
+	if arg, ok := msg.Command.(QueryArgs); ok {
+		result.Value = sm.getConfig(arg.Num)
+	} else if arg, ok := msg.Command.(MoveArgs); ok {
+		if sm.cache[arg.ClientId] < arg.RequestSeq {
+			newConfig := sm.getConfig(-1)
+			newConfig.Shards[arg.Shard] = arg.GID
+			sm.cache[arg.ClientId] = arg.RequestSeq
+			sm.appendNewConfig(newConfig)
+		}
 	}
 	sm.notifyIfPresent(msg.CommandIndex, result)
 }
