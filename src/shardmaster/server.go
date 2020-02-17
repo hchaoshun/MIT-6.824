@@ -1,6 +1,5 @@
 package shardmaster
 
-
 import (
 	"log"
 	"raft"
@@ -25,7 +24,7 @@ type Op struct {
 
 type NotifyArg struct {
 	Term		int
-	Value		string
+	Value		interface{} //Query将config传给value
 	Err 		Err
 }
 
@@ -40,6 +39,20 @@ type ShardMaster struct {
 	configs 		[]Config // indexed by config num
 }
 
+func (sm *ShardMaster) getConfig(num int) Config {
+	var srcConfig Config
+	if num < 0 || num >= len(sm.configs) - 1 {
+		srcConfig = sm.configs[len(sm.configs) - 1]
+	}  else {
+		srcConfig = sm.configs[num]
+	}
+	dstConfig := Config{Num:srcConfig.Num, Shards:srcConfig.Shards, Groups:make(map[int][]string)}
+	for gid, servers := range srcConfig.Groups {
+		dstConfig.Groups[gid] = servers
+	}
+	return dstConfig
+}
+
 func (sm *ShardMaster) notifyIfPresent(index int, reply NotifyArg) {
 	if ch, ok := sm.notifyChanMap[index]; ok {
 		ch <- reply
@@ -47,10 +60,11 @@ func (sm *ShardMaster) notifyIfPresent(index int, reply NotifyArg) {
 	delete(sm.notifyChanMap, index)
 }
 
-func (sm *ShardMaster) start(command interface{}) (Err, string) {
+//返回的第二个参数是config
+func (sm *ShardMaster) start(command interface{}) (Err, interface{}) {
 	index, term, ok := sm.rf.Start(command)
 	if !ok {
-		return WrongLeader, ""
+		return WrongLeader, struct {}{}
 	}
 	sm.Lock()
 	notifyCh := make(chan NotifyArg)
@@ -60,17 +74,16 @@ func (sm *ShardMaster) start(command interface{}) (Err, string) {
 	select {
 	case msg := <- notifyCh:
 		if msg.Term != term {
-			return WrongLeader, ""
+			return WrongLeader, struct {}{}
 		} else {
-			//todo 返回空?
-			return OK, ""
+			return OK, msg.Value
 		}
 	//todo 时间合并
 	case <-time.After(time.Duration(3 * time.Second)):
 		sm.Lock()
 		delete(sm.notifyChanMap, index)
 		sm.Unlock()
-		return Timeout, ""
+		return Timeout, struct {}{}
 	}
 }
 
@@ -87,7 +100,19 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 }
 
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
-	// Your code here.
+	sm.Lock()
+	if args.Num > 0 && args.Num < len(sm.configs) {
+		reply.Err, reply.Config = OK, sm.getConfig(args.Num)
+		sm.Unlock()
+		return
+	} else {
+		sm.Unlock()
+		err, config := sm.start(args.copy())
+		reply.Err = err
+		if err == OK {
+			reply.Config = config.(Config)
+		}
+	}
 }
 
 
@@ -109,7 +134,9 @@ func (sm *ShardMaster) Raft() *raft.Raft {
 
 func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 	result := NotifyArg{Term:msg.CommandTerm, Err:OK, Value:""}
-	//todo handle msg.Command
+	if args, ok := msg.Command.(QueryArgs); ok {
+		result.Value = sm.getConfig(args.Num)
+	}
 	sm.notifyIfPresent(msg.CommandIndex, result)
 }
 
