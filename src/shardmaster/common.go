@@ -18,10 +18,10 @@ package shardmaster
 //
 
 // The number of shards.
+//shard数量固定，类似于一致性hash算法
 const NShards = 10
 
-// A configuration -- an assignment of shards to groups.
-// Please don't change this.
+//不同shard值gid可能相同，让gid均匀分布在shards数组中，gid的数量差 < 2
 type Config struct {
 	Num    int              // config number
 	Shards [NShards]int     // shard -> gid
