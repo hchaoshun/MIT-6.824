@@ -141,6 +141,54 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 			sm.cache[arg.ClientId] = arg.RequestSeq
 			sm.appendNewConfig(newConfig)
 		}
+	} else if arg, ok := msg.Command.(LeaveArgs); ok {
+		if sm.cache[arg.ClientId] < arg.RequestSeq {
+			newConfig := sm.getConfig(-1)
+			leaveGIDs := make(map[int]struct{})
+			for _, gid := range arg.GIDs {
+				leaveGIDs[gid] = struct{}{}
+				delete(newConfig.Groups, gid)
+			}
+			if len(newConfig.Groups) == 0 {
+				newConfig.Shards = [NShards]int{}
+			} else {
+				remainingGIDs := make([]int, 0)
+				for gid := range newConfig.Groups {
+					remainingGIDs = append(remainingGIDs, gid)
+				}
+				shardsPerGID := NShards / len(remainingGIDs)
+				if shardsPerGID < 1 {
+					shardsPerGID = 1
+				}
+				shardsByGID := make(map[int]int)
+			loop:
+				for i, j := 0, 0; i < NShards; i++ {
+					gid := newConfig.Shards[i]
+					if _, ok := leaveGIDs[gid]; ok || shardsByGID[gid] == shardsPerGID {
+						//遍历remainingGIDs, 为i修改合适的gid
+						for _, remain := range remainingGIDs {
+							if shardsByGID[remain] < shardsPerGID {
+								newConfig.Shards[i] = remain
+								shardsByGID[remain] += 1
+								continue loop
+							}
+						}
+						//考虑到分配可能不完全均匀的情况
+						//当shardsByGID所有remaining gid 数量都达到shardsPerGID 时，
+						//从头开始轮询remainingGIDs加入shards和追加shardsbygid数量
+						id := remainingGIDs[j]
+						j = (j + 1) % len(remainingGIDs)
+						newConfig.Shards[i] = id
+						shardsByGID[id] += 1
+					} else {
+						shardsByGID[gid] += 1
+					}
+				}
+			}
+
+			sm.cache[arg.ClientId] = arg.RequestSeq
+			sm.appendNewConfig(newConfig)
+		}
 	}
 	sm.notifyIfPresent(msg.CommandIndex, result)
 }
