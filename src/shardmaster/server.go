@@ -141,9 +141,11 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 			sm.cache[arg.ClientId] = arg.RequestSeq
 			sm.appendNewConfig(newConfig)
 		}
+	//保证gids离开后，余下的gids在shards中依然均匀分布
 	} else if arg, ok := msg.Command.(LeaveArgs); ok {
 		if sm.cache[arg.ClientId] < arg.RequestSeq {
 			newConfig := sm.getConfig(-1)
+			//离开的gids集合
 			leaveGIDs := make(map[int]struct{})
 			for _, gid := range arg.GIDs {
 				leaveGIDs[gid] = struct{}{}
@@ -152,16 +154,20 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 			if len(newConfig.Groups) == 0 {
 				newConfig.Shards = [NShards]int{}
 			} else {
+				//余下的gids集合
 				remainingGIDs := make([]int, 0)
 				for gid := range newConfig.Groups {
 					remainingGIDs = append(remainingGIDs, gid)
 				}
+				//每个gid在shards中分布的数量
 				shardsPerGID := NShards / len(remainingGIDs)
 				if shardsPerGID < 1 {
 					shardsPerGID = 1
 				}
+				// gid -> number of shards it owns
 				shardsByGID := make(map[int]int)
 			loop:
+				//j的范围是[0,len(remainingGIDs))
 				for i, j := 0, 0; i < NShards; i++ {
 					gid := newConfig.Shards[i]
 					if _, ok := leaveGIDs[gid]; ok || shardsByGID[gid] == shardsPerGID {
@@ -186,6 +192,36 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 				}
 			}
 
+			sm.cache[arg.ClientId] = arg.RequestSeq
+			sm.appendNewConfig(newConfig)
+		}
+	} else if arg, ok := msg.Command.(JoinArgs); ok {
+		if sm.cache[arg.ClientId] < arg.RequestSeq {
+			newConfig := sm.getConfig(-1)
+			newGIDs := make([]int, 0)
+			for gid, servers := range arg.Servers {
+				if s, ok := newConfig.Groups[gid]; ok {
+					newConfig.Groups[gid] = append(s, servers...)
+				} else {
+					newConfig.Groups[gid] = servers
+					newGIDs = append(newGIDs, gid)
+				}
+			}
+			if len(newConfig.Groups) == 0 {
+				newConfig.Shards = [NShards]int{}
+			} else {
+				shardsPerGID := NShards / len(newGIDs)
+				shardsByGID := make(map[int]int)
+				for i, j := 0, 0; i < NShards; i++ {
+					id := newGIDs[j]
+					if shardsByGID[id] < shardsPerGID {
+						newConfig.Shards[i] = newGIDs[j]
+						shardsByGID[id] += 1
+						j = (j + 1) % len(newGIDs)
+					}
+
+				}
+			}
 			sm.cache[arg.ClientId] = arg.RequestSeq
 			sm.appendNewConfig(newConfig)
 		}
