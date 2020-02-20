@@ -89,6 +89,7 @@ func (sm *ShardMaster) start(command interface{}) (Err, interface{}) {
 
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 	reply.Err, _ = sm.start(args.copy())
+	//DPrintf("config: %v", sm.configs)
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
@@ -198,18 +199,19 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 	} else if arg, ok := msg.Command.(JoinArgs); ok {
 		if sm.cache[arg.ClientId] < arg.RequestSeq {
 			newConfig := sm.getConfig(-1)
-			newGIDs := make([]int, 0)
+			newGIDS := make([]int, 0)
 			for gid, servers := range arg.Servers {
 				if s, ok := newConfig.Groups[gid]; ok {
 					newConfig.Groups[gid] = append(s, servers...)
 				} else {
 					newConfig.Groups[gid] = servers
-					newGIDs = append(newGIDs, gid)
+					newGIDS = append(newGIDS, gid)
 				}
 			}
 			if len(newConfig.Groups) == 0 {
 				newConfig.Shards = [NShards]int{}
-			} else {
+			//大于NShards表示加入的gid有问题，已经超过最大显示，不考虑此情况
+			} else if len(newConfig.Groups) <= NShards {
 				shardsPerGID := NShards / len(newConfig.Groups)
 				shardsByGID := make(map[int]int)
 				for i, j := 0, 0; i < NShards; i++ {
@@ -217,10 +219,10 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 					//gid为0表示第一次加入情况，shardsByGID[gid] == shardsPerGID表示此时gid数量已足够
 					//此时加入新gid
 					if gid == 0 || shardsByGID[gid] == shardsPerGID {
-						id := newGIDs[j]
-						newConfig.Shards[i] = newGIDs[j]
+						id := newGIDS[j]
+						newConfig.Shards[i] = newGIDS[j]
 						shardsByGID[id] += 1
-						j = (j + 1) % len(newGIDs)
+						j = (j + 1) % len(newGIDS)
 					} else {
 						//gid数量不够，递增gid数量
 						shardsByGID[gid] += 1
@@ -236,6 +238,8 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 }
 
 func (sm *ShardMaster) run() {
+	//todo ???
+	go sm.rf.Replay(1)
 	for {
 		select {
 		case msg := <-sm.applyCh:

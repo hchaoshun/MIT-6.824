@@ -1,5 +1,7 @@
 package shardmaster
 
+import "log"
+
 //
 // Master shard server: assigns shards to replication groups.
 //
@@ -16,6 +18,16 @@ package shardmaster
 //
 // You will need to add fields to the RPC argument structs.
 //
+
+const Debug = 1
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug > 0 {
+		log.Printf(format, a...)
+	}
+	return
+}
+
 
 // The number of shards.
 //shard数量固定，类似于一致性hash算法
@@ -52,7 +64,7 @@ type JoinArgs struct {
 }
 
 func (arg *JoinArgs) copy() JoinArgs {
-	newArgs := JoinArgs{Servers:make(map[int][]string)}
+	newArgs := JoinArgs{ClientId:arg.ClientId, RequestSeq:arg.RequestSeq, Servers:make(map[int][]string)}
 	for gid, servers := range arg.Servers {
 		newArgs.Servers[gid] = servers
 	}
@@ -60,7 +72,6 @@ func (arg *JoinArgs) copy() JoinArgs {
 }
 
 type JoinReply struct {
-	WrongLeader bool
 	Err         Err
 }
 
@@ -71,12 +82,11 @@ type LeaveArgs struct {
 }
 
 func (arg *LeaveArgs) copy() LeaveArgs {
-	newArgs := LeaveArgs{GIDs:arg.GIDs}
+	newArgs := LeaveArgs{ClientId:arg.ClientId, RequestSeq:arg.RequestSeq, GIDs:arg.GIDs}
 	return newArgs
 }
 
 type LeaveReply struct {
-	WrongLeader bool
 	Err         Err
 }
 
@@ -88,11 +98,10 @@ type MoveArgs struct {
 }
 
 func (arg *MoveArgs) copy() MoveArgs {
-	return MoveArgs{Shard:arg.Shard, GID:arg.GID}
+	return MoveArgs{ClientId:arg.ClientId, RequestSeq:arg.RequestSeq, Shard:arg.Shard, GID:arg.GID}
 }
 
 type MoveReply struct {
-	WrongLeader bool
 	Err         Err
 }
 
@@ -105,7 +114,6 @@ func (arg *QueryArgs) copy() QueryArgs {
 }
 
 type QueryReply struct {
-	WrongLeader bool
 	Err         Err
 	Config      Config
 }

@@ -37,7 +37,7 @@ func (ck *Clerk) Query(num int) Config {
 	for {
 		var reply QueryReply
 		if ck.Servers[ck.LeaderId].Call("ShardMaster.Query", &args, &reply) &&
-			reply.WrongLeader == false {
+			reply.Err == OK {
 			return reply.Config
 		}
 		ck.LeaderId = (ck.LeaderId + 1) % len(ck.Servers)
@@ -51,7 +51,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	for {
 		var reply JoinReply
 		if ck.Servers[ck.LeaderId].Call("ShardMaster.Join", &args, &reply) &&
-			reply.WrongLeader == false {
+			reply.Err == OK {
 			return
 		}
 		ck.LeaderId = (ck.LeaderId + 1) % len(ck.Servers)
@@ -65,7 +65,7 @@ func (ck *Clerk) Leave(gids []int) {
 	for {
 		var reply LeaveReply
 		if ck.Servers[ck.LeaderId].Call("ShardMaster.Leave", &args, &reply) &&
-			reply.WrongLeader == false {
+			reply.Err == OK {
 			return
 		}
 		ck.LeaderId = (ck.LeaderId + 1) % len(ck.Servers)
@@ -79,7 +79,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 	for {
 		var reply MoveReply
 		if ck.Servers[ck.LeaderId].Call("ShardMaster.Move", &args, &reply) &&
-			reply.WrongLeader == false {
+			reply.Err == OK {
 			return
 		}
 		ck.LeaderId = (ck.LeaderId + 1) % len(ck.Servers)
