@@ -210,14 +210,20 @@ func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 			if len(newConfig.Groups) == 0 {
 				newConfig.Shards = [NShards]int{}
 			} else {
-				shardsPerGID := NShards / len(newGIDs)
+				shardsPerGID := NShards / len(newConfig.Groups)
 				shardsByGID := make(map[int]int)
 				for i, j := 0, 0; i < NShards; i++ {
-					id := newGIDs[j]
-					if shardsByGID[id] < shardsPerGID {
+					gid := newConfig.Shards[i]
+					//gid为0表示第一次加入情况，shardsByGID[gid] == shardsPerGID表示此时gid数量已足够
+					//此时加入新gid
+					if gid == 0 || shardsByGID[gid] == shardsPerGID {
+						id := newGIDs[j]
 						newConfig.Shards[i] = newGIDs[j]
 						shardsByGID[id] += 1
 						j = (j + 1) % len(newGIDs)
+					} else {
+						//gid数量不够，递增gid数量
+						shardsByGID[gid] += 1
 					}
 
 				}
