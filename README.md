@@ -12,7 +12,7 @@ Lab for MIT 6.824 Distributed Systems Class
     - [ ] 3A
     - [x] 3B
 - [ ] Lab 4
-    - [ ] 4A
+    - [x] 4A
     - [ ] 4B
     - [ ] Challenge 1
     - [ ] Challenge 2
