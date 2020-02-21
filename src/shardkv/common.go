@@ -1,5 +1,7 @@
 package shardkv
 
+import "time"
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running op-at-a-time paxos.
@@ -13,7 +15,12 @@ const (
 	OK            = "OK"
 	ErrNoKey      = "ErrNoKey"
 	ErrWrongGroup = "ErrWrongGroup" // todo client和server如何处理此错误？
+	ErrWrongLeader = "ErrWrongLeader"
+	ErrTimeout = "ErrTimeout"
 )
+
+const StartTimeoutInterval = time.Duration(3 * time.Second)
+
 
 type Err string
 

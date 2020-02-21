@@ -2,12 +2,23 @@ package shardkv
 
 
 // import "shardmaster"
-import "labrpc"
+import (
+	"bytes"
+	"labrpc"
+	"log"
+	"shardmaster"
+	"time"
+)
 import "raft"
 import "sync"
 import "labgob"
 
-
+//必须注册，否则报空指针异常
+func init() {
+	labgob.Register(GetArgs{})
+	labgob.Register(PutAppendArgs{})
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+}
 
 type Op struct {
 	// Your definitions here.
@@ -15,26 +26,143 @@ type Op struct {
 	// otherwise RPC will break.
 }
 
-type ShardKV struct {
-	mu           sync.Mutex
-	me           int
-	rf           *raft.Raft
-	applyCh      chan raft.ApplyMsg
-	make_end     func(string) *labrpc.ClientEnd
-	gid          int
-	masters      []*labrpc.ClientEnd
-	maxraftstate int // snapshot if log grows this big
+type NotifyMsg struct {
+	Term 		int
+	Err         Err
+	Value       string
+}
 
-	// Your definitions here.
+type ShardKV struct {
+	sync.Mutex
+	me           	int
+	rf           	*raft.Raft
+	applyCh      	chan raft.ApplyMsg
+	make_end     	func(string) *labrpc.ClientEnd
+	gid          	int
+	masters      	[]*labrpc.ClientEnd
+	maxraftstate 	int // snapshot if log grows this big
+	persister 		*raft.Persister
+
+	mck 			*shardmaster.Clerk //shardmaster 的client端
+	config			shardmaster.Config //存储最近的config
+
+	shutdown 		chan struct{}
+	data 			map[string]string
+	cache			map[int64]int
+	notifyChanMap	map[int]chan NotifyMsg
+}
+
+func (kv *ShardKV) snapshot(lastCommandIndex int) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.config)
+	e.Encode(kv.data)
+	e.Encode(kv.cache)
+	snapshot := w.Bytes()
+	//需要修改log和lastincludedindex，所以此函数在raft层实现
+	kv.rf.PersistAndSaveSnapshot(lastCommandIndex, snapshot)
+}
+
+func (kv *ShardKV) readSnapshot() {
+	snapshot := kv.persister.ReadSnapshot()
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	if d.Decode(&kv.config) != nil ||
+		d.Decode(&kv.data) != nil ||
+		d.Decode(&kv.cache) != nil {
+		log.Fatal("error while unmarshal snapshot.")
+	}
+
+}
+
+func (kv *ShardKV) notifyIfPresent(index int, reply NotifyMsg) {
+	if ch, ok := kv.notifyChanMap[index]; ok {
+		ch <- reply
+		delete(kv.notifyChanMap, index)
+	}
+}
+
+func(kv *ShardKV) snapshotIfNeed(lastCommandIndex int) {
+	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
+		kv.snapshot(lastCommandIndex)
+	}
+}
+
+func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
+	kv.Lock()
+	defer kv.Unlock()
+	//client 的confignum于server的不一致
+	if configNum != kv.config.Num {
+		return ErrWrongGroup, ""
+	}
+
+	//立即返回
+	index, term, ok := kv.rf.Start(command)
+	if !ok {
+		return ErrWrongLeader, ""
+	}
+	//TODO 缓冲足够?
+	notifyCh := make(chan NotifyMsg)
+	kv.notifyChanMap[index] = notifyCh
+	kv.Unlock()
+	select {
+	case msg := <-notifyCh:
+		kv.Lock()
+		if msg.Term != term {
+			return ErrWrongLeader, ""
+		} else {
+			return msg.Err, msg.Value
+		}
+	case <-time.After(StartTimeoutInterval):
+		kv.Lock()
+		delete(kv.notifyChanMap, index)
+		return ErrTimeout, ""
+	}
 }
 
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	reply.Err, reply.Value = kv.Start(args.ConfigNum, args.copy())
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	reply.Err, _ = kv.Start(args.ConfigNum, args.copy())
+}
+
+func (kv *ShardKV) apply(msg raft.ApplyMsg) {
+	result := NotifyMsg{Term:msg.CommandTerm, Err:"OK", Value:""}
+	//todo
+	if arg, ok := msg.Command.(GetArgs); ok {
+		result.Value = kv.data[arg.Key]
+	}
+	kv.notifyIfPresent(msg.CommandIndex, result)
+	kv.snapshotIfNeed(msg.CommandIndex)
+
+}
+
+func(kv *ShardKV) run() {
+	//todo
+	go kv.rf.Replay(1)
+	for {
+		select {
+		case msg := <-kv.applyCh:
+			kv.Lock()
+			if msg.CommandValid {
+				kv.apply(msg)
+			} else if cmd, ok := msg.Command.(string); ok {
+				if cmd == "InstallSnapshot" {
+					kv.readSnapshot()
+				}
+				//todo newleader?
+			}
+			kv.Unlock()
+		case <-kv.shutdown:
+			return
+		}
+	}
 }
 
 //
@@ -89,15 +217,18 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.make_end = make_end
 	kv.gid = gid
 	kv.masters = masters
-
-	// Your initialization code here.
-
-	// Use something like this to talk to the shardmaster:
-	// kv.mck = shardmaster.MakeClerk(kv.masters)
-
+	kv.persister = persister
+	kv.mck = shardmaster.MakeClerk(kv.masters)
+	kv.config = shardmaster.Config{}
+	kv.shutdown = make(chan struct{})
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	kv.data = make(map[string]string)
+	kv.cache = make(map[int64]int)
+	kv.notifyChanMap = make(map[int]chan NotifyMsg)
+
+	go kv.run()
 
 	return kv
 }
