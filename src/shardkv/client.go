@@ -36,26 +36,20 @@ func nrand() int64 {
 }
 
 type Clerk struct {
-	sm       *shardmaster.Clerk //shardmaster 的client端
-	config   shardmaster.Config
-	make_end func(string) *labrpc.ClientEnd
-	// You will have to modify this struct.
+	sm       		*shardmaster.Clerk //shardmaster 的client端
+	config   		shardmaster.Config
+	make_end 		func(string) *labrpc.ClientEnd
+	clientId		int64
+	requestSeq		int
 }
 
-//
-// the tester calls MakeClerk.
-//
-// masters[] is needed to call shardmaster.MakeClerk().
-//
-// make_end(servername) turns a server name from a
-// Config.Groups[gid][i] into a labrpc.ClientEnd on which you can
-// send RPCs.
-//
 func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
-	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.requestSeq = 0
+	ck.config = ck.sm.Query(-1)
 	return ck
 }
 
@@ -78,9 +72,10 @@ func (ck *Clerk) Get(key string) string {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
-				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
+				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					return reply.Value
 				}
+				//todo 此错误需不需要再次请求?
 				if ok && (reply.Err == ErrWrongGroup) {
 					break
 				}
@@ -88,6 +83,7 @@ func (ck *Clerk) Get(key string) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask master for the latest configuration.
+		//todo 是-1还是ck.config.Num + 1
 		ck.config = ck.sm.Query(-1)
 	}
 
@@ -113,7 +109,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				if ok && reply.WrongLeader == false && reply.Err == OK {
+				if ok && reply.Err == OK {
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
