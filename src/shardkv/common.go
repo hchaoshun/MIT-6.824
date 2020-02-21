@@ -12,34 +12,42 @@ package shardkv
 const (
 	OK            = "OK"
 	ErrNoKey      = "ErrNoKey"
-	ErrWrongGroup = "ErrWrongGroup"
+	ErrWrongGroup = "ErrWrongGroup" // todo client和server如何处理此错误？
 )
 
 type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	// You'll have to add definitions here.
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Key   			string
+	Value 			string
+	Op    			string // "Put" or "Append"
+	ConfigNum		int
+	ClientId		int64
+	RequestSeq		int
 }
 
 type PutAppendReply struct {
-	WrongLeader bool
 	Err         Err
+}
+
+func (arg *PutAppendArgs) copy() PutAppendArgs {
+	newArgs := PutAppendArgs{Key:arg.Key, Value:arg.Value, Op:arg.Op, ConfigNum:arg.ConfigNum,
+		ClientId:arg.ClientId, RequestSeq:arg.RequestSeq}
+	return newArgs
 }
 
 type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
+	Key 			string
+	ConfigNum		int
 }
 
 type GetReply struct {
-	WrongLeader bool
 	Err         Err
 	Value       string
+}
+
+func (arg *GetArgs) copy() GetArgs {
+	newArgs := GetArgs{Key:arg.Key, ConfigNum:arg.ConfigNum}
+	return newArgs
 }
