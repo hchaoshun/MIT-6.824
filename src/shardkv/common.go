@@ -21,7 +21,7 @@ const (
 
 const StartTimeoutInterval = time.Duration(3 * time.Second)
 
-
+type IntSet map[int]struct{}
 type Err string
 
 // Put or Append

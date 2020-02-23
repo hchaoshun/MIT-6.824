@@ -43,8 +43,9 @@ type ShardKV struct {
 	maxraftstate 	int // snapshot if log grows this big
 	persister 		*raft.Persister
 
+	ownShards		IntSet //此group在config.Shards中的分布情况，范围是0~NShards
 	mck 			*shardmaster.Clerk //shardmaster 的client端
-	config			shardmaster.Config //存储最近的config
+	config			shardmaster.Config //存储当前的config
 
 	shutdown 		chan struct{}
 	data 			map[string]string
@@ -134,9 +135,30 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 	result := NotifyMsg{Term:msg.CommandTerm, Err:"OK", Value:""}
-	//todo
 	if arg, ok := msg.Command.(GetArgs); ok {
-		result.Value = kv.data[arg.Key]
+		shard := key2shard(arg.Key)
+		if _, ok := kv.ownShards[shard]; !ok {
+			result.Err = ErrWrongGroup
+		} else if arg.ConfigNum != kv.config.Num {
+			result.Err = ErrWrongGroup
+		} else {
+			result.Value = kv.data[arg.Key]
+		}
+	} else if arg, ok := msg.Command.(PutAppendArgs); ok {
+		shard := key2shard(arg.Key)
+		if _, ok := kv.ownShards[shard]; !ok {
+			result.Err = ErrWrongGroup
+		} else if arg.ConfigNum != kv.config.Num {
+			result.Err = ErrWrongGroup
+		//TODO cache缓存是否正确?
+		} else if kv.cache[arg.ClientId] < arg.RequestSeq {
+			if arg.Op == "Put" {
+				kv.data[arg.Key] = arg.Value
+			} else {
+				kv.data[arg.Key] += arg.Value
+			}
+			kv.cache[arg.ClientId] = arg.RequestSeq
+		}
 	}
 	kv.notifyIfPresent(msg.CommandIndex, result)
 	kv.snapshotIfNeed(msg.CommandIndex)
@@ -218,6 +240,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.gid = gid
 	kv.masters = masters
 	kv.persister = persister
+	kv.ownShards = make(IntSet)
 	kv.mck = shardmaster.MakeClerk(kv.masters)
 	kv.config = shardmaster.Config{}
 	kv.shutdown = make(chan struct{})

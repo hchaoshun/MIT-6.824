@@ -35,6 +35,7 @@ func nrand() int64 {
 	return x
 }
 
+//client 和 server 都存储最近的config，client发送到server时需要比较config里的num是否一致
 type Clerk struct {
 	sm       		*shardmaster.Clerk //shardmaster 的client端
 	config   		shardmaster.Config
@@ -95,11 +96,14 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	ck.requestSeq++
 	args := PutAppendArgs{}
 	args.Key = key
 	args.Value = value
 	args.Op = op
-
+	args.ConfigNum = ck.config.Num
+	args.ClientId = ck.clientId
+	args.RequestSeq = ck.requestSeq
 
 	for {
 		shard := key2shard(key)
