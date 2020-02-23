@@ -44,7 +44,7 @@ type ShardKV struct {
 	persister 		*raft.Persister
 
 	ownShards		IntSet //此group在config.Shards中的分布情况，范围是0~NShards
-	mck 			*shardmaster.Clerk //shardmaster 的client端
+	mck 			*shardmaster.Clerk //shardmaster 的client端,只有leader才能和它通信
 	config			shardmaster.Config //存储当前的config
 
 	shutdown 		chan struct{}
@@ -59,6 +59,7 @@ func (kv *ShardKV) snapshot(lastCommandIndex int) {
 	e.Encode(kv.config)
 	e.Encode(kv.data)
 	e.Encode(kv.cache)
+	e.Encode(kv.ownShards)
 	snapshot := w.Bytes()
 	//需要修改log和lastincludedindex，所以此函数在raft层实现
 	kv.rf.PersistAndSaveSnapshot(lastCommandIndex, snapshot)
@@ -73,7 +74,8 @@ func (kv *ShardKV) readSnapshot() {
 	d := labgob.NewDecoder(r)
 	if d.Decode(&kv.config) != nil ||
 		d.Decode(&kv.data) != nil ||
-		d.Decode(&kv.cache) != nil {
+		d.Decode(&kv.cache) != nil ||
+		d.Decode(&kv.ownShards) != nil {
 		log.Fatal("error while unmarshal snapshot.")
 	}
 
@@ -131,6 +133,23 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err, _ = kv.Start(args.ConfigNum, args.copy())
+}
+
+//定时向shardmaster获取最新config
+func (kv *ShardKV) poll() {
+	kv.Lock()
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		kv.Unlock()
+		return
+	}
+	nextConfigNum := kv.config.Num + 1
+	kv.Unlock()
+	newConfig := kv.mck.Query(nextConfigNum)
+	//条件成立说明shardmaster已经更新了config，此时kv也要更新config
+	//条件不成立说明之前的config是最新的，此时什么也不做
+	if newConfig.Num == nextConfigNum {
+		//todo 更新kv的config信息
+	}
 }
 
 func (kv *ShardKV) apply(msg raft.ApplyMsg) {

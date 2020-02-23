@@ -311,9 +311,11 @@ func (rf *Raft) sendLogEntry(follower int) {
 			}
 
 			//必须要majority之后才能提交
+			//日志为空时条件不会成立
 			if rf.canCommit(commitIndex) {
 				rf.commitIndex = commitIndex
 				rf.persist()
+				//leader apply log to state machine操作
 				rf.notifyApplyCh <- struct{}{}
 			}
 		}

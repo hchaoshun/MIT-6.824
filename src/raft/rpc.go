@@ -115,6 +115,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	oldCommitIndex := rf.commitIndex
 	rf.commitIndex = Min(args.CommitIndex, rf.logIndex - 1)
 	if oldCommitIndex < rf.commitIndex {
+		//follower apply log to state machine 操作
 		rf.notifyApplyCh <- struct{}{}
 	}
 	rf.persist()

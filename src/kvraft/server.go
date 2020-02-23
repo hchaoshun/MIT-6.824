@@ -129,6 +129,7 @@ func (kv *KVServer) Kill() {
 	close(kv.shutdown)
 }
 
+//leader和follower都会调用此函数更新存储信息
 func(kv *KVServer) apply(msg raft.ApplyMsg) {
 	result := NotifyMsg{Term:msg.CommandTerm, Err:"OK", Value:""}
 	if arg, ok := msg.Command.(GetArgs); ok {
@@ -161,7 +162,7 @@ func(kv *KVServer) run() {
 		//也可能是InstallSnapshot后接收
 		case msg := <-kv.applyCh:
 			kv.Lock()
-			//接收到此消息一定是leader
+			//leader和follower都会接收到此消息
 			DPrintf("%v applyCh received %v", kv.me, msg)
 			if msg.CommandValid {
 				DPrintf("call apply. commandIndex: %v", msg.CommandIndex)
