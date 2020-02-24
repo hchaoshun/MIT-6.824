@@ -23,6 +23,10 @@ const StartTimeoutInterval = time.Duration(3 * time.Second)
 
 type IntSet map[int]struct{}
 type Err string
+type MigrationData struct {
+	Data	map[string]string
+	Cache 	map[int64]int
+}
 
 // Put or Append
 type PutAppendArgs struct {

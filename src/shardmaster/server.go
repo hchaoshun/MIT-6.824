@@ -131,6 +131,7 @@ func (sm *ShardMaster) Raft() *raft.Raft {
 	return sm.rf
 }
 
+//添加、删除或者移动shard都会发生数据迁移
 func (sm *ShardMaster) apply(msg raft.ApplyMsg) {
 	result := NotifyArg{Term:msg.CommandTerm, Err:OK, Value:""}
 	if arg, ok := msg.Command.(QueryArgs); ok {

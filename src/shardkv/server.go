@@ -34,23 +34,29 @@ type NotifyMsg struct {
 
 type ShardKV struct {
 	sync.Mutex
-	me           	int
-	rf           	*raft.Raft
-	applyCh      	chan raft.ApplyMsg
-	make_end     	func(string) *labrpc.ClientEnd
-	gid          	int
-	masters      	[]*labrpc.ClientEnd
-	maxraftstate 	int // snapshot if log grows this big
-	persister 		*raft.Persister
+	me           		int
+	rf           		*raft.Raft
+	applyCh      		chan raft.ApplyMsg
+	make_end     		func(string) *labrpc.ClientEnd
+	gid          		int
+	masters      		[]*labrpc.ClientEnd
+	maxraftstate 		int // snapshot if log grows this big
+	persister 			*raft.Persister
+	mck 				*shardmaster.Clerk //shardmaster 的client端,只有leader才能和它通信
+	config				shardmaster.Config //存储当前的config
 
-	ownShards		IntSet //此group在config.Shards中的分布情况，范围是0~NShards
-	mck 			*shardmaster.Clerk //shardmaster 的client端,只有leader才能和它通信
-	config			shardmaster.Config //存储当前的config
+	ownShards			IntSet //此group在config.Shards中的分布情况，范围是0~NShards
+	//map[int]MigrationData中，key是此gid中要迁移走的shard，value是此gid中要迁移走的shard对应的数据
+	migratingShards		map[int]map[int]MigrationData
+	//key是从其他gid迁移到此gid的shard
+	waitingShards		map[int]int
+	historyConfigs		[]shardmaster.Config
 
-	shutdown 		chan struct{}
-	data 			map[string]string
-	cache			map[int64]int
-	notifyChanMap	map[int]chan NotifyMsg
+
+	shutdown 			chan struct{}
+	data 				map[string]string
+	cache				map[int64]int
+	notifyChanMap		map[int]chan NotifyMsg
 }
 
 func (kv *ShardKV) snapshot(lastCommandIndex int) {
@@ -60,6 +66,9 @@ func (kv *ShardKV) snapshot(lastCommandIndex int) {
 	e.Encode(kv.data)
 	e.Encode(kv.cache)
 	e.Encode(kv.ownShards)
+	e.Encode(kv.migratingShards)
+	e.Encode(kv.waitingShards)
+	e.Encode(kv.historyConfigs)
 	snapshot := w.Bytes()
 	//需要修改log和lastincludedindex，所以此函数在raft层实现
 	kv.rf.PersistAndSaveSnapshot(lastCommandIndex, snapshot)
@@ -75,7 +84,10 @@ func (kv *ShardKV) readSnapshot() {
 	if d.Decode(&kv.config) != nil ||
 		d.Decode(&kv.data) != nil ||
 		d.Decode(&kv.cache) != nil ||
-		d.Decode(&kv.ownShards) != nil {
+		d.Decode(&kv.ownShards) != nil ||
+		d.Decode(&kv.migratingShards) != nil ||
+		d.Decode(&kv.waitingShards) != nil ||
+		d.Decode(&kv.historyConfigs) != nil {
 		log.Fatal("error while unmarshal snapshot.")
 	}
 
@@ -148,9 +160,59 @@ func (kv *ShardKV) poll() {
 	//条件成立说明shardmaster已经更新了config，此时kv也要更新config
 	//条件不成立说明之前的config是最新的，此时什么也不做
 	if newConfig.Num == nextConfigNum {
-		//todo 更新kv的config信息
+		kv.rf.Start(newConfig)
 	}
 }
+
+//可能会将其他gid的shard迁移进来，或/和将shard迁移到其他gid
+//考虑old:[1:6, 2:6, 3:6, 4:6, 5:8, 6:8]
+//   new:[1:6, 2:6, 3:7, 4:7, 5:6, 6:6]
+//其中[3,4]是将要迁移走的，存放在migratingShards
+//[5,6]是将要迁移进来的，存放在waitingShards
+func (kv *ShardKV) appendNewConfig(newConfig shardmaster.Config) {
+	//新的config 的num必须大于原来的
+	if newConfig.Num <= kv.config.Num {
+		return
+	}
+
+	oldConfig, oldOwnShards := kv.config, kv.ownShards
+	kv.historyConfigs = append(kv.historyConfigs, oldConfig)
+	oldNum := oldConfig.Num
+	kv.config, kv.ownShards = newConfig, make(IntSet)
+
+	for shard, gid := range newConfig.Shards {
+		if gid == kv.gid {
+			if _, ok := oldOwnShards[shard]; ok {
+				kv.ownShards[shard] = struct{}{}
+				//删除完最后剩下的是已经被其他gid替换的，此时需要迁移走
+				delete(oldOwnShards, shard)
+			} else {
+				//满足gid == kv.gid且不在oldOwnShards里的就是新加的且需要迁移进来的shard
+				kv.waitingShards[shard] = oldNum
+			}
+		}
+	}
+
+	if len(oldOwnShards) != 0 {
+		migrateData := make(map[int]MigrationData)
+		for shard := range oldOwnShards {
+			data := MigrationData{Data:make(map[string]string), Cache:make(map[int64]int)}
+			for k, v := range kv.data {
+				if key2shard(k) == shard {
+					data.Data[k] = v
+					delete(kv.data, k)
+				}
+
+				//todo how to handle cache
+			}
+			migrateData[shard] = data
+		}
+		kv.migratingShards[oldNum] = migrateData
+	}
+
+}
+
+
 
 func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 	result := NotifyMsg{Term:msg.CommandTerm, Err:"OK", Value:""}
@@ -178,6 +240,8 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 			}
 			kv.cache[arg.ClientId] = arg.RequestSeq
 		}
+	} else if arg, ok := msg.Command.(shardmaster.Config); ok {
+		kv.appendNewConfig(arg)
 	}
 	kv.notifyIfPresent(msg.CommandIndex, result)
 	kv.snapshotIfNeed(msg.CommandIndex)

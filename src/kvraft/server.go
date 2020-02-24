@@ -38,6 +38,7 @@ type KVServer struct {
 	shutdown 		chan struct{}
 	data			map[string]string
 	cache			map[int64]int
+	//只有leader才会用到此map，follower为空
 	notifyChanMap 	map[int]chan NotifyMsg // map的key是applyCh返回的CommandIndex
 }
 
@@ -74,6 +75,7 @@ func(kv *KVServer) snapshotIfNeed(lastCommandIndex int) {
 }
 
 func (kv *KVServer) notifyIfPresent(index int, reply NotifyMsg) {
+	//todo 验证只有leader才会满足此条件
 	if ch, ok := kv.notifyChanMap[index]; ok {
 		//DPrintf("send to notifyCh. %v, %v", index, reply)
 		ch <- reply
@@ -93,6 +95,7 @@ func (kv *KVServer) Start(command interface{}) (Err, string) {
 	kv.notifyChanMap[index] = notifyCh
 	kv.Unlock()
 	select {
+	//只有leader会等待此信息
 	case msg := <-notifyCh:
 		DPrintf("start term: %v， index: %v, received: %v", term, index, msg)
 		//当出现partition的时候，start发送command的leader可能是partition后原来的leader(此leader的term小于真正的leader term）
