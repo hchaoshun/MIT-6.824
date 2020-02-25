@@ -34,8 +34,8 @@ type PutAppendArgs struct {
 	Value 			string
 	Op    			string // "Put" or "Append"
 	ConfigNum		int
-	ClientId		int64
-	RequestSeq		int
+	RequestId		int64
+	ExpireRequestId	int64
 }
 
 type PutAppendReply struct {
@@ -44,7 +44,7 @@ type PutAppendReply struct {
 
 func (arg *PutAppendArgs) copy() PutAppendArgs {
 	newArgs := PutAppendArgs{Key:arg.Key, Value:arg.Value, Op:arg.Op, ConfigNum:arg.ConfigNum,
-		ClientId:arg.ClientId, RequestSeq:arg.RequestSeq}
+		RequestId:arg.RequestId, ExpireRequestId:arg.ExpireRequestId}
 	return newArgs
 }
 

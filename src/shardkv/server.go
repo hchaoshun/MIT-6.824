@@ -55,7 +55,7 @@ type ShardKV struct {
 
 	shutdown 			chan struct{}
 	data 				map[string]string
-	cache				map[int64]int
+	cache				map[int64]string
 	notifyChanMap		map[int]chan NotifyMsg
 }
 
@@ -232,13 +232,14 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 		} else if arg.ConfigNum != kv.config.Num {
 			result.Err = ErrWrongGroup
 		//TODO cache缓存是否正确?
-		} else if kv.cache[arg.ClientId] < arg.RequestSeq {
+		} else if _, ok := kv.cache[arg.RequestId]; !ok {
 			if arg.Op == "Put" {
 				kv.data[arg.Key] = arg.Value
 			} else {
 				kv.data[arg.Key] += arg.Value
 			}
-			kv.cache[arg.ClientId] = arg.RequestSeq
+			delete(kv.cache, arg.ExpireRequestId)
+			kv.cache[arg.RequestId] = arg.Key
 		}
 	} else if arg, ok := msg.Command.(shardmaster.Config); ok {
 		kv.appendNewConfig(arg)
@@ -323,15 +324,19 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.gid = gid
 	kv.masters = masters
 	kv.persister = persister
-	kv.ownShards = make(IntSet)
 	kv.mck = shardmaster.MakeClerk(kv.masters)
 	kv.config = shardmaster.Config{}
 	kv.shutdown = make(chan struct{})
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	kv.ownShards = make(IntSet)
+	kv.migratingShards = make(map[int]map[int]MigrationData)
+	kv.waitingShards = make(map[int]int)
+	kv.historyConfigs = make([]shardmaster.Config, 0)
+
 	kv.data = make(map[string]string)
-	kv.cache = make(map[int64]int)
+	kv.cache = make(map[int64]string)
 	kv.notifyChanMap = make(map[int]chan NotifyMsg)
 
 	go kv.run()

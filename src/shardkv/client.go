@@ -41,7 +41,7 @@ type Clerk struct {
 	config   		shardmaster.Config
 	make_end 		func(string) *labrpc.ClientEnd
 	clientId		int64
-	requestSeq		int
+	lastRequestId		int64
 }
 
 func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
@@ -49,7 +49,7 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
 	ck.clientId = nrand()
-	ck.requestSeq = 0
+	ck.lastRequestId = 0
 	ck.config = ck.sm.Query(-1)
 	return ck
 }
@@ -96,14 +96,16 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	ck.requestSeq++
+	requestId := time.Now().UnixNano() - ck.clientId
 	args := PutAppendArgs{}
 	args.Key = key
 	args.Value = value
 	args.Op = op
 	args.ConfigNum = ck.config.Num
-	args.ClientId = ck.clientId
-	args.RequestSeq = ck.requestSeq
+	args.RequestId = requestId
+	args.ExpireRequestId = ck.lastRequestId
+
+	ck.lastRequestId = requestId
 
 	for {
 		shard := key2shard(key)
