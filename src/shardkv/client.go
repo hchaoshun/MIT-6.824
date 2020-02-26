@@ -96,6 +96,7 @@ func (ck *Clerk) Get(key string) string {
 // You will have to modify this function.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	//不同client可能会在同一时间发出请求，单独的时间戳无法保证id的唯一
 	requestId := time.Now().UnixNano() - ck.clientId
 	args := PutAppendArgs{}
 	args.Key = key

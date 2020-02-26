@@ -17,6 +17,9 @@ import "labgob"
 func init() {
 	labgob.Register(GetArgs{})
 	labgob.Register(PutAppendArgs{})
+	labgob.Register(shardmaster.Config{})
+	labgob.Register(ShardMigrationReply{})
+	labgob.Register(ShardCleanReply{})
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 }
 
@@ -116,6 +119,7 @@ func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
 		return ErrWrongGroup, ""
 	}
 
+	//节点一致性操作
 	//立即返回
 	index, term, ok := kv.rf.Start(command)
 	if !ok {
@@ -149,10 +153,14 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err, _ = kv.Start(args.ConfigNum, args.Copy())
 }
 
+//server端无法判断迁移是否成功，所以此rpc不用同步到各节点
+//client端迁移成功后会发出clean操作通知server删除已迁移的shard
+//此调用是一个普通的rpc调用，不需要raft同步各节点
 func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigrationReply) {
 	kv.Lock()
 	defer kv.Unlock()
 	configNum := args.ConfigNum
+	//不需要此server是leader，任何一个节点均可
 	if configNum >= kv.config.Num {
 		reply.Err = ErrWrongGroup
 		return
@@ -170,7 +178,6 @@ func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigratio
 			}
 		}
 	}
-	//todo 不通过raft保证一致性？
 
 }
 
@@ -210,6 +217,7 @@ func (kv *ShardKV) poll() {
 	}
 }
 
+//Leader作为client向server发出请求拉server数据
 func (kv *ShardKV) pull() {
 	kv.Lock()
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.waitingShards) == 0 {
@@ -233,7 +241,6 @@ func (kv *ShardKV) pull() {
 	}
 }
 
-//Leader作为client向server发出请求拉server数据
 func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 	gid := oldConfig.Shards[shard]
 	if servers, ok := oldConfig.Groups[gid]; ok {
@@ -253,9 +260,9 @@ func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 
 }
 
+//此操作发生在client已经把数据拉回成功之后，client向server发出clean rpc请求，通知server删除迁移后的shard
 func (kv *ShardKV) clean() {
 	kv.Lock()
-	//todo 不需要所有的server发clean请求
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.cleaningShards) == 0 {
 		kv.Unlock()
 		return
@@ -352,10 +359,7 @@ func (kv *ShardKV) appendNewConfig(newConfig shardmaster.Config) {
 		}
 		kv.migratingShards[oldNum] = migrateData
 	}
-
 }
-
-
 
 func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 	result := NotifyMsg{Term:msg.CommandTerm, Err:"OK", Value:""}
