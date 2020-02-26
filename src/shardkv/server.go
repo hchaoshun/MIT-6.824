@@ -140,11 +140,35 @@ func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
 
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	reply.Err, reply.Value = kv.Start(args.ConfigNum, args.copy())
+	reply.Err, reply.Value = kv.Start(args.ConfigNum, args.Copy())
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	reply.Err, _ = kv.Start(args.ConfigNum, args.copy())
+	reply.Err, _ = kv.Start(args.ConfigNum, args.Copy())
+}
+
+func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigrationReply) {
+	kv.Lock()
+	defer kv.Unlock()
+	configNum := args.configNum
+	if configNum >= kv.config.Num {
+		reply.Err = ErrWrongGroup
+		return
+	}
+	reply.Err, reply.shard, reply.configNum, reply.MigrationData =
+		OK, args.shard, args.configNum, MigrationData{Data:make(map[string]string), Cache:make(map[int64]string)}
+
+	if v, ok := kv.migratingShards[configNum]; ok {
+		if migrationData, ok := v[args.shard]; ok {
+			for k, v := range migrationData.Data {
+				reply.MigrationData.Data[k] = v
+			}
+			for k, v := range migrationData.Cache {
+				reply.MigrationData.Cache[k] = v
+			}
+		}
+	}
+
 }
 
 //定时向shardmaster获取最新config
@@ -164,6 +188,49 @@ func (kv *ShardKV) poll() {
 	}
 }
 
+func (kv *ShardKV) pull() {
+	kv.Lock()
+	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.waitingShards) == 0 {
+		kv.Unlock()
+		return
+	}
+
+	ch, count := make(chan struct{}), 0
+	for shard, configNum := range kv.waitingShards {
+		go func(shard int, config shardmaster.Config) {
+			kv.doPull(shard, config)
+			ch <- struct{}{}
+		}(shard, kv.historyConfigs[configNum].Copy())
+		count++
+	}
+	kv.Unlock()
+
+	for count > 0 {
+		<-ch
+		count--
+	}
+}
+
+//作为client向server发出请求拉server数据
+func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
+	gid := oldConfig.Shards[shard]
+	if servers, ok := oldConfig.Groups[gid]; ok {
+		args := ShardMigrationArgs{shard:shard, configNum:oldConfig.Num}
+		for si := 0; si < len(servers); si++ {
+			srv := kv.make_end(servers[si])
+			var reply ShardMigrationReply
+			ok := srv.Call("ShardKV.ShardMigration", &args, &reply)
+			//只要有一个server成功执行就返回，不必关注server是否是leader
+			if ok && reply.Err == OK {
+				//拉回来的数据要同步到follower
+				kv.Start(oldConfig.Num, reply)
+				return
+			}
+		}
+	}
+
+}
+
 //可能会将其他gid的shard迁移进来，或/和将shard迁移到其他gid
 //考虑old:[1:6, 2:6, 3:6, 4:6, 5:8, 6:8]
 //   new:[1:6, 2:6, 3:7, 4:7, 5:6, 6:6]
@@ -176,9 +243,9 @@ func (kv *ShardKV) appendNewConfig(newConfig shardmaster.Config) {
 	}
 
 	oldConfig, oldOwnShards := kv.config, kv.ownShards
-	kv.historyConfigs = append(kv.historyConfigs, oldConfig)
+	kv.historyConfigs = append(kv.historyConfigs, oldConfig.Copy())
 	oldNum := oldConfig.Num
-	kv.config, kv.ownShards = newConfig, make(IntSet)
+	kv.config, kv.ownShards = newConfig.Copy(), make(IntSet)
 
 	for shard, gid := range newConfig.Shards {
 		if gid == kv.gid {
@@ -196,14 +263,19 @@ func (kv *ShardKV) appendNewConfig(newConfig shardmaster.Config) {
 	if len(oldOwnShards) != 0 {
 		migrateData := make(map[int]MigrationData)
 		for shard := range oldOwnShards {
-			data := MigrationData{Data:make(map[string]string), Cache:make(map[int64]int)}
+			data := MigrationData{Data:make(map[string]string), Cache:make(map[int64]string)}
 			for k, v := range kv.data {
 				if key2shard(k) == shard {
 					data.Data[k] = v
 					delete(kv.data, k)
 				}
 
-				//todo how to handle cache
+			}
+			for k, v := range kv.cache {
+				if key2shard(v) == shard {
+					data.Cache[k] = v
+					delete(kv.cache, k)
+				}
 			}
 			migrateData[shard] = data
 		}
@@ -231,7 +303,6 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 			result.Err = ErrWrongGroup
 		} else if arg.ConfigNum != kv.config.Num {
 			result.Err = ErrWrongGroup
-		//TODO cache缓存是否正确?
 		} else if _, ok := kv.cache[arg.RequestId]; !ok {
 			if arg.Op == "Put" {
 				kv.data[arg.Key] = arg.Value
@@ -243,6 +314,19 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 		}
 	} else if arg, ok := msg.Command.(shardmaster.Config); ok {
 		kv.appendNewConfig(arg)
+	} else if arg, ok := msg.Command.(ShardMigrationReply); ok {
+		//用于迁移的configNum应该刚好是新的configNum的前一个
+		if arg.configNum == kv.config.Num - 1{
+			delete(kv.waitingShards, arg.shard)
+			//todo 是否一定不在ownShards里？
+			kv.ownShards[arg.shard] = struct{}{}
+			for k, v := range arg.MigrationData.Data {
+				kv.data[k] = v
+			}
+			for k, v := range arg.MigrationData.Cache {
+				kv.cache[k] = v
+			}
+		}
 	}
 	kv.notifyIfPresent(msg.CommandIndex, result)
 	kv.snapshotIfNeed(msg.CommandIndex)

@@ -40,7 +40,7 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
-func (conf *Config) copy() Config {
+func (conf *Config) Copy() Config {
 	newConf := Config{Num:conf.Num, Shards:conf.Shards, Groups:make(map[int][]string)}
 	for gid, servers := range conf.Groups {
 		//todo 不用append是否正确
@@ -63,7 +63,7 @@ type JoinArgs struct {
 	Servers 		map[int][]string // new GID -> servers mappings
 }
 
-func (arg *JoinArgs) copy() JoinArgs {
+func (arg *JoinArgs) Copy() JoinArgs {
 	newArgs := JoinArgs{ClientId:arg.ClientId, RequestSeq:arg.RequestSeq, Servers:make(map[int][]string)}
 	for gid, servers := range arg.Servers {
 		newArgs.Servers[gid] = servers
@@ -81,7 +81,7 @@ type LeaveArgs struct {
 	GIDs 			[]int
 }
 
-func (arg *LeaveArgs) copy() LeaveArgs {
+func (arg *LeaveArgs) Copy() LeaveArgs {
 	newArgs := LeaveArgs{ClientId:arg.ClientId, RequestSeq:arg.RequestSeq, GIDs:arg.GIDs}
 	return newArgs
 }
@@ -97,7 +97,7 @@ type MoveArgs struct {
 	GID   			int
 }
 
-func (arg *MoveArgs) copy() MoveArgs {
+func (arg *MoveArgs) Copy() MoveArgs {
 	return MoveArgs{ClientId:arg.ClientId, RequestSeq:arg.RequestSeq, Shard:arg.Shard, GID:arg.GID}
 }
 
@@ -109,7 +109,7 @@ type QueryArgs struct {
 	Num int // desired config number
 }
 
-func (arg *QueryArgs) copy() QueryArgs {
+func (arg *QueryArgs) Copy() QueryArgs {
 	return QueryArgs{Num:arg.Num}
 }
 

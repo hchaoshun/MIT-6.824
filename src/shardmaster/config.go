@@ -241,7 +241,7 @@ func (cfg *config) ShutdownServer(i int) {
 
 	// a fresh persister, in case old instance
 	// continues to update the Persister.
-	// but copy old persister's content so that we always
+	// but Copy old persister's content so that we always
 	// pass Make() the last persisted state.
 	if cfg.saved[i] != nil {
 		cfg.saved[i] = cfg.saved[i].Copy()
@@ -275,7 +275,7 @@ func (cfg *config) StartServer(i int) {
 
 	// a fresh persister, so old instance doesn't overwrite
 	// new instance's persisted state.
-	// give the fresh persister a copy of the old persister's
+	// give the fresh persister a Copy of the old persister's
 	// state, so that the spec is that we pass StartKVServer()
 	// the last persisted state.
 	if cfg.saved[i] != nil {

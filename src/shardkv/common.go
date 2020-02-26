@@ -25,7 +25,7 @@ type IntSet map[int]struct{}
 type Err string
 type MigrationData struct {
 	Data	map[string]string
-	Cache 	map[int64]int
+	Cache 	map[int64]string
 }
 
 // Put or Append
@@ -42,7 +42,7 @@ type PutAppendReply struct {
 	Err         Err
 }
 
-func (arg *PutAppendArgs) copy() PutAppendArgs {
+func (arg *PutAppendArgs) Copy() PutAppendArgs {
 	newArgs := PutAppendArgs{Key:arg.Key, Value:arg.Value, Op:arg.Op, ConfigNum:arg.ConfigNum,
 		RequestId:arg.RequestId, ExpireRequestId:arg.ExpireRequestId}
 	return newArgs
@@ -58,7 +58,21 @@ type GetReply struct {
 	Value       string
 }
 
-func (arg *GetArgs) copy() GetArgs {
+func (arg *GetArgs) Copy() GetArgs {
 	newArgs := GetArgs{Key:arg.Key, ConfigNum:arg.ConfigNum}
 	return newArgs
 }
+
+type ShardMigrationArgs struct {
+	shard 		int
+	configNum	int
+}
+
+type ShardMigrationReply struct {
+	Err				Err
+	shard 			int //返回的shard用于加入client的ownShards
+	configNum		int //返回的configNum用于和client判断是否正确
+	MigrationData	MigrationData
+}
+
+

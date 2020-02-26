@@ -88,16 +88,16 @@ func (sm *ShardMaster) start(command interface{}) (Err, interface{}) {
 }
 
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
-	reply.Err, _ = sm.start(args.copy())
+	reply.Err, _ = sm.start(args.Copy())
 	//DPrintf("config: %v", sm.configs)
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
-	reply.Err, _ = sm.start(args.copy())
+	reply.Err, _ = sm.start(args.Copy())
 }
 
 func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
-	reply.Err, _ = sm.start(args.copy())
+	reply.Err, _ = sm.start(args.Copy())
 }
 
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
@@ -108,7 +108,7 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 		return
 	} else {
 		sm.Unlock()
-		err, config := sm.start(args.copy())
+		err, config := sm.start(args.Copy())
 		reply.Err = err
 		if err == OK {
 			reply.Config = config.(Config)
