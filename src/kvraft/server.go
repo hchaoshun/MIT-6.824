@@ -121,6 +121,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	reply.Err, reply.Value = kv.Start(args.copy())
 }
 
+//rpc调用是保证分布式系统一致性过程，不改变服务内部状态，状态由apply改变
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("put key: %v, value: %v", args.Key, args.Value)
 	reply.Err, _ = kv.Start(args.copy())

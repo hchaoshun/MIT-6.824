@@ -5,8 +5,8 @@ import "time"
 //
 // Sharded key/value server.
 // Lots of replica groups, each running op-at-a-time paxos.
-// Shardmaster decides which group serves each shard.
-// Shardmaster may change shard assignment from time to time.
+// Shardmaster decides which group serves each Shard.
+// Shardmaster may change Shard assignment from time to time.
 //
 // You will have to modify these definitions.
 //
@@ -64,15 +64,31 @@ func (arg *GetArgs) Copy() GetArgs {
 }
 
 type ShardMigrationArgs struct {
-	shard 		int
-	configNum	int
+	Shard     int
+	ConfigNum int
 }
 
 type ShardMigrationReply struct {
-	Err				Err
-	shard 			int //返回的shard用于加入client的ownShards
-	configNum		int //返回的configNum用于和client判断是否正确
-	MigrationData	MigrationData
+	Err           Err
+	Shard         int //返回的shard用于加入client的ownShards
+	ConfigNum     int //返回的configNum用于和client判断是否正确
+	MigrationData MigrationData
+}
+
+type ShardCleanArgs struct {
+	Shard 		int
+	ConfigNum 	int
+}
+
+type ShardCleanReply struct {
+	Shard 		int
+	ConfigNum	int
+	Err			Err
+}
+
+func (args *ShardCleanReply) Copy() ShardCleanReply {
+	newArgs := ShardCleanReply{Shard:args.Shard, ConfigNum:args.ConfigNum}
+	return newArgs
 }
 
 

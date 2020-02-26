@@ -5,7 +5,7 @@ package shardkv
 //
 // the client first talks to the shardmaster to find out
 // the assignment of shards (keys) to groups, and then
-// talks to the group that holds the key's shard.
+// talks to the group that holds the key's Shard.
 //
 
 import "labrpc"
@@ -15,7 +15,7 @@ import "shardmaster"
 import "time"
 
 //
-// which shard is a key in?
+// which Shard is a key in?
 // please use this function,
 // and please do not change it.
 //
@@ -68,7 +68,7 @@ func (ck *Clerk) Get(key string) string {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
-			// try each server for the shard.
+			// try each server for the Shard.
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply

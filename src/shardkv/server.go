@@ -50,6 +50,8 @@ type ShardKV struct {
 	migratingShards		map[int]map[int]MigrationData
 	//key是从其他gid迁移到此gid的shard
 	waitingShards		map[int]int
+	//已经migrate的shard
+	cleaningShards		map[int]IntSet
 	historyConfigs		[]shardmaster.Config
 
 
@@ -150,16 +152,16 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigrationReply) {
 	kv.Lock()
 	defer kv.Unlock()
-	configNum := args.configNum
+	configNum := args.ConfigNum
 	if configNum >= kv.config.Num {
 		reply.Err = ErrWrongGroup
 		return
 	}
-	reply.Err, reply.shard, reply.configNum, reply.MigrationData =
-		OK, args.shard, args.configNum, MigrationData{Data:make(map[string]string), Cache:make(map[int64]string)}
+	reply.Err, reply.Shard, reply.ConfigNum, reply.MigrationData =
+		OK, args.Shard, args.ConfigNum, MigrationData{Data: make(map[string]string), Cache:make(map[int64]string)}
 
 	if v, ok := kv.migratingShards[configNum]; ok {
-		if migrationData, ok := v[args.shard]; ok {
+		if migrationData, ok := v[args.Shard]; ok {
 			for k, v := range migrationData.Data {
 				reply.MigrationData.Data[k] = v
 			}
@@ -168,10 +170,30 @@ func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigratio
 			}
 		}
 	}
+	//todo 不通过raft保证一致性？
 
 }
 
-//定时向shardmaster获取最新config
+func (kv *ShardKV) ShardClean(args *ShardCleanArgs, reply *ShardCleanReply) {
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongGroup
+		return
+	}
+	reply.Shard, reply.ConfigNum = args.Shard, args.ConfigNum
+	kv.Lock()
+	defer kv.Unlock()
+	if v, ok := kv.migratingShards[args.ConfigNum]; ok {
+		if _, ok := v[args.Shard]; ok {
+			kv.Unlock()
+			//通知各个节点，删除migratingShards的数据
+			err, _ := kv.Start(args.ConfigNum, reply.Copy())
+			reply.Err = err
+			kv.Lock()
+		}
+	}
+}
+
+//Leader定时向shardmaster获取最新config
 func (kv *ShardKV) poll() {
 	kv.Lock()
 	if _, isLeader := kv.rf.GetState(); !isLeader {
@@ -211,11 +233,11 @@ func (kv *ShardKV) pull() {
 	}
 }
 
-//作为client向server发出请求拉server数据
+//Leader作为client向server发出请求拉server数据
 func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 	gid := oldConfig.Shards[shard]
 	if servers, ok := oldConfig.Groups[gid]; ok {
-		args := ShardMigrationArgs{shard:shard, configNum:oldConfig.Num}
+		args := ShardMigrationArgs{Shard: shard, ConfigNum:oldConfig.Num}
 		for si := 0; si < len(servers); si++ {
 			srv := kv.make_end(servers[si])
 			var reply ShardMigrationReply
@@ -231,6 +253,55 @@ func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 
 }
 
+func (kv *ShardKV) clean() {
+	kv.Lock()
+	//todo 不需要所有的server发clean请求
+	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.cleaningShards) == 0 {
+		kv.Unlock()
+		return
+	}
+
+	ch, count := make(chan struct{}), 0
+	for configNum, shards := range kv.cleaningShards {
+		oldConfig := kv.historyConfigs[configNum]
+		for shard := range shards {
+			go func(shard int, config shardmaster.Config) {
+				kv.doClean(shard, config)
+				ch <- struct{}{}
+			}(shard, oldConfig)
+			count++
+		}
+	}
+	for count > 0 {
+		<-ch
+		count--
+	}
+}
+
+func (kv *ShardKV) doClean(shard int, oldConfig shardmaster.Config) {
+	gid := oldConfig.Shards[shard]
+	if servers, ok := oldConfig.Groups[gid]; ok {
+		args := ShardCleanArgs{Shard:shard, ConfigNum:oldConfig.Num}
+		for si := 0; si < len(servers); si++ {
+			srv := kv.make_end(servers[si])
+			var reply ShardCleanReply
+			ok := srv.Call("ShardKV.ShardClean", &args, &reply)
+			//只有srv是leader才会成功
+			if ok && reply.Err == OK {
+				//todo 不会发生死锁?
+				kv.Lock()
+				delete(kv.cleaningShards[oldConfig.Num], shard)
+				if len(kv.cleaningShards[oldConfig.Num]) == 0 {
+					delete(kv.cleaningShards, oldConfig.Num)
+				}
+				kv.Unlock()
+				return
+			}
+		}
+	}
+}
+
+//shardmaster已经更新config
 //可能会将其他gid的shard迁移进来，或/和将shard迁移到其他gid
 //考虑old:[1:6, 2:6, 3:6, 4:6, 5:8, 6:8]
 //   new:[1:6, 2:6, 3:7, 4:7, 5:6, 6:6]
@@ -316,15 +387,27 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 		kv.appendNewConfig(arg)
 	} else if arg, ok := msg.Command.(ShardMigrationReply); ok {
 		//用于迁移的configNum应该刚好是新的configNum的前一个
-		if arg.configNum == kv.config.Num - 1{
-			delete(kv.waitingShards, arg.shard)
+		if arg.ConfigNum == kv.config.Num - 1 {
+			delete(kv.waitingShards, arg.Shard)
 			//todo 是否一定不在ownShards里？
-			kv.ownShards[arg.shard] = struct{}{}
+			kv.ownShards[arg.Shard] = struct{}{}
+			//执行到此步说明其他gid的shard已经成功迁移到此gid，此时需要将迁移后的shard清理掉
+			if _, ok := kv.cleaningShards[arg.ConfigNum]; !ok {
+				kv.cleaningShards[arg.ConfigNum] = make(IntSet)
+			}
+			kv.cleaningShards[arg.ConfigNum][arg.Shard] = struct{}{}
 			for k, v := range arg.MigrationData.Data {
 				kv.data[k] = v
 			}
 			for k, v := range arg.MigrationData.Cache {
 				kv.cache[k] = v
+			}
+		}
+	} else if arg, ok := msg.Command.(ShardCleanReply); ok {
+		if v, ok := kv.migratingShards[arg.ConfigNum]; ok {
+			delete(v, arg.Shard)
+			if len(v) == 0 {
+				delete(kv.migratingShards, arg.ConfigNum)
 			}
 		}
 	}
@@ -390,7 +473,7 @@ func (kv *ShardKV) Kill() {
 // send RPCs. You'll need this to send RPCs to other groups.
 //
 // look at client.go for examples of how to use masters[]
-// and make_end() to send RPCs to the group owning a specific shard.
+// and make_end() to send RPCs to the group owning a specific Shard.
 //
 // StartServer() must return quickly, so it should start goroutines
 // for any long-running work.
@@ -417,6 +500,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.ownShards = make(IntSet)
 	kv.migratingShards = make(map[int]map[int]MigrationData)
 	kv.waitingShards = make(map[int]int)
+	kv.cleaningShards = make(map[int]IntSet)
 	kv.historyConfigs = make([]shardmaster.Config, 0)
 
 	kv.data = make(map[string]string)
