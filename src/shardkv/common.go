@@ -19,6 +19,9 @@ const (
 	ErrTimeout = "ErrTimeout"
 )
 
+const PollInterval = time.Duration(200 * time.Millisecond)
+const PullInterval = time.Duration(100 * time.Millisecond)
+const cleanInterval = time.Duration(100 * time.Millisecond)
 const StartTimeoutInterval = time.Duration(3 * time.Second)
 
 type IntSet map[int]struct{}

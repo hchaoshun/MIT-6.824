@@ -16,10 +16,17 @@ import "labgob"
 //必须注册，否则报空指针异常
 func init() {
 	labgob.Register(GetArgs{})
+	labgob.Register(GetReply{})
 	labgob.Register(PutAppendArgs{})
-	labgob.Register(shardmaster.Config{})
+	labgob.Register(PutAppendReply{})
+	labgob.Register(ShardMigrationArgs{})
 	labgob.Register(ShardMigrationReply{})
+	labgob.Register(ShardCleanArgs{})
 	labgob.Register(ShardCleanReply{})
+	labgob.Register(MigrationData{})
+	labgob.Register(shardmaster.Config{})
+
+
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 }
 
@@ -62,6 +69,10 @@ type ShardKV struct {
 	data 				map[string]string
 	cache				map[int64]string
 	notifyChanMap		map[int]chan NotifyMsg
+
+	pollTimer			*time.Timer
+	pullTimer			*time.Timer
+	cleanTimer			*time.Timer
 }
 
 func (kv *ShardKV) snapshot(lastCommandIndex int) {
@@ -203,6 +214,7 @@ func (kv *ShardKV) ShardClean(args *ShardCleanArgs, reply *ShardCleanReply) {
 //Leader定时向shardmaster获取最新config
 func (kv *ShardKV) poll() {
 	kv.Lock()
+	defer kv.pollTimer.Reset(PollInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		kv.Unlock()
 		return
@@ -220,6 +232,7 @@ func (kv *ShardKV) poll() {
 //Leader作为client向server发出请求拉server数据
 func (kv *ShardKV) pull() {
 	kv.Lock()
+	defer kv.pullTimer.Reset(PullInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.waitingShards) == 0 {
 		kv.Unlock()
 		return
@@ -263,6 +276,7 @@ func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 //此操作发生在client已经把数据拉回成功之后，client向server发出clean rpc请求，通知server删除迁移后的shard
 func (kv *ShardKV) clean() {
 	kv.Lock()
+	defer kv.cleanTimer.Reset(cleanInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.cleaningShards) == 0 {
 		kv.Unlock()
 		return
@@ -420,6 +434,21 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 
 }
 
+func (kv *ShardKV) tick() {
+	for {
+		select {
+		case <-kv.pollTimer.C:
+			kv.poll()
+		case <-kv.pullTimer.C:
+			kv.pull()
+		case <-kv.cleanTimer.C:
+			kv.clean()
+		case <-kv.shutdown:
+			return
+		}
+	}
+}
+
 func(kv *ShardKV) run() {
 	//todo
 	go kv.rf.Replay(1)
@@ -432,6 +461,9 @@ func(kv *ShardKV) run() {
 			} else if cmd, ok := msg.Command.(string); ok {
 				if cmd == "InstallSnapshot" {
 					kv.readSnapshot()
+				//todo 放在这儿启动是否合适?
+				} else if cmd == "ReplayDone" {
+					kv.tick()
 				}
 				//todo newleader?
 			}
@@ -442,15 +474,10 @@ func(kv *ShardKV) run() {
 	}
 }
 
-//
-// the tester calls Kill() when a ShardKV instance won't
-// be needed again. you are not required to do anything
-// in Kill(), but it might be convenient to (for example)
-// turn off debug output from this instance.
-//
+
 func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
-	// Your code here, if desired.
+	close(kv.shutdown)
 }
 
 
@@ -510,6 +537,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.data = make(map[string]string)
 	kv.cache = make(map[int64]string)
 	kv.notifyChanMap = make(map[int]chan NotifyMsg)
+
+	kv.pollTimer =  time.NewTimer(time.Duration(0))
+	kv.pullTimer = time.NewTimer(time.Duration(0))
+	kv.cleanTimer = time.NewTimer(time.Duration(0))
 
 	go kv.run()
 
