@@ -44,6 +44,8 @@ type Clerk struct {
 	lastRequestId		int64
 }
 
+//初始化client的时候需要和shardmaster通信获取最新的配置
+//config用于确定发出的key属于哪一个group
 func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.sm = shardmaster.MakeClerk(masters)
@@ -76,7 +78,7 @@ func (ck *Clerk) Get(key string) string {
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					return reply.Value
 				}
-				//todo 此错误需不需要再次请求?
+				//发生此错误说明config不是最新的，需要获取最新config再重试
 				if ok && (reply.Err == ErrWrongGroup) {
 					break
 				}
@@ -84,11 +86,9 @@ func (ck *Clerk) Get(key string) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask master for the latest configuration.
-		//todo 是-1还是ck.config.Num + 1
 		ck.config = ck.sm.Query(-1)
 	}
 
-	return ""
 }
 
 //
@@ -109,6 +109,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	ck.lastRequestId = requestId
 
 	for {
+		DPrintf("client config: %v", ck.config)
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
@@ -120,12 +121,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					DPrintf("wrong group. break")
 					break
 				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask master for the latest configuration.
+		DPrintf("wrong group, try again.")
 		ck.config = ck.sm.Query(-1)
 	}
 }
@@ -134,5 +137,6 @@ func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
+
 	ck.PutAppend(key, value, "Append")
 }

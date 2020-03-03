@@ -1,6 +1,9 @@
 package shardkv
 
-import "time"
+import (
+	"log"
+	"time"
+)
 
 //
 // Sharded key/value server.
@@ -10,6 +13,15 @@ import "time"
 //
 // You will have to modify these definitions.
 //
+
+const Debug = 1
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug > 0 {
+		log.Printf(format, a...)
+	}
+	return
+}
 
 const (
 	OK            = "OK"

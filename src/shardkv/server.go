@@ -123,10 +123,13 @@ func(kv *ShardKV) snapshotIfNeed(lastCommandIndex int) {
 }
 
 func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
+	DPrintf("this1")
 	kv.Lock()
 	defer kv.Unlock()
+	DPrintf("this2")
 	//client 的confignum于server的不一致
 	if configNum != kv.config.Num {
+		DPrintf("server wrong group. client: %v, server: %v", configNum, kv.config.Num)
 		return ErrWrongGroup, ""
 	}
 
@@ -137,12 +140,14 @@ func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
 		return ErrWrongLeader, ""
 	}
 	//TODO 缓冲足够?
+
 	notifyCh := make(chan NotifyMsg)
 	kv.notifyChanMap[index] = notifyCh
 	kv.Unlock()
 	select {
 	case msg := <-notifyCh:
 		kv.Lock()
+		DPrintf("%v wait notifyCh.", msg)
 		if msg.Term != term {
 			return ErrWrongLeader, ""
 		} else {
@@ -161,6 +166,8 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	DPrintf("put %v, %v", args.Key, args.Value)
+	DPrintf("server config: %v", kv.config)
 	reply.Err, _ = kv.Start(args.ConfigNum, args.Copy())
 }
 
@@ -213,6 +220,7 @@ func (kv *ShardKV) ShardClean(args *ShardCleanArgs, reply *ShardCleanReply) {
 
 //Leader定时向shardmaster获取最新config
 func (kv *ShardKV) poll() {
+	DPrintf("start poll job.")
 	kv.Lock()
 	defer kv.pollTimer.Reset(PollInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader {
@@ -227,10 +235,12 @@ func (kv *ShardKV) poll() {
 	if newConfig.Num == nextConfigNum {
 		kv.rf.Start(newConfig)
 	}
+	DPrintf("poll job finish.")
 }
 
 //Leader作为client向server发出请求拉server数据
 func (kv *ShardKV) pull() {
+	DPrintf("start pull job.")
 	kv.Lock()
 	defer kv.pullTimer.Reset(PullInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.waitingShards) == 0 {
@@ -252,6 +262,7 @@ func (kv *ShardKV) pull() {
 		<-ch
 		count--
 	}
+	DPrintf("pull job finish")
 }
 
 func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
@@ -275,6 +286,7 @@ func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 
 //此操作发生在client已经把数据拉回成功之后，client向server发出clean rpc请求，通知server删除迁移后的shard
 func (kv *ShardKV) clean() {
+	DPrintf("start clean job.")
 	kv.Lock()
 	defer kv.cleanTimer.Reset(cleanInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.cleaningShards) == 0 {
@@ -297,6 +309,7 @@ func (kv *ShardKV) clean() {
 		<-ch
 		count--
 	}
+	DPrintf("clean job finish.")
 }
 
 func (kv *ShardKV) doClean(shard int, oldConfig shardmaster.Config) {
@@ -409,7 +422,7 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 			delete(kv.waitingShards, arg.Shard)
 			//todo 是否一定不在ownShards里？
 			kv.ownShards[arg.Shard] = struct{}{}
-			//执行到此步说明其他gid的shard已经成功迁移到此gid，此时需要将迁移后的shard清理掉
+			//执行到此步说明其他gid的shard已经成功迁移到此gid，此时需要通知server将迁移后的shard清理掉
 			if _, ok := kv.cleaningShards[arg.ConfigNum]; !ok {
 				kv.cleaningShards[arg.ConfigNum] = make(IntSet)
 			}
@@ -434,6 +447,7 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 
 }
 
+//todo 在poll/pull/clean过程中均会占用lock导致不能正常提供服务，有没有办法解决?
 func (kv *ShardKV) tick() {
 	for {
 		select {
@@ -480,35 +494,6 @@ func (kv *ShardKV) Kill() {
 	close(kv.shutdown)
 }
 
-
-//
-// servers[] contains the ports of the servers in this group.
-//
-// me is the index of the current server in servers[].
-//
-// the k/v server should store snapshots through the underlying Raft
-// implementation, which should call persister.SaveStateAndSnapshot() to
-// atomically save the Raft state along with the snapshot.
-//
-// the k/v server should snapshot when Raft's saved state exceeds
-// maxraftstate bytes, in order to allow Raft to garbage-collect its
-// log. if maxraftstate is -1, you don't need to snapshot.
-//
-// gid is this group's GID, for interacting with the shardmaster.
-//
-// pass masters[] to shardmaster.MakeClerk() so you can send
-// RPCs to the shardmaster.
-//
-// make_end(servername) turns a server name from a
-// Config.Groups[gid][i] into a labrpc.ClientEnd on which you can
-// send RPCs. You'll need this to send RPCs to other groups.
-//
-// look at client.go for examples of how to use masters[]
-// and make_end() to send RPCs to the group owning a specific Shard.
-//
-// StartServer() must return quickly, so it should start goroutines
-// for any long-running work.
-//
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int,
 	gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want

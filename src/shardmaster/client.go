@@ -23,6 +23,7 @@ func nrand() int64 {
 	return x
 }
 
+//此client应该是一个管理员，控制group的查询/加入/删除/移动
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.Servers = servers
