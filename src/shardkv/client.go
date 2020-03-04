@@ -69,6 +69,7 @@ func (ck *Clerk) Get(key string) string {
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		args.ConfigNum = ck.config.Num
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the Shard.
 			for si := 0; si < len(servers); si++ {
@@ -112,23 +113,25 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		DPrintf("client config: %v", ck.config)
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		//注意：第二次循环以后config更新，confignum也随着更新
+		DPrintf("client args.ConfigNum: %v", args.ConfigNum)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
+				args.ConfigNum = ck.config.Num
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
-					DPrintf("wrong group. break")
 					break
 				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask master for the latest configuration.
-		DPrintf("wrong group, try again.")
+		DPrintf("client wrong group, try again.")
 		ck.config = ck.sm.Query(-1)
 	}
 }
@@ -137,6 +140,5 @@ func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
-
 	ck.PutAppend(key, value, "Append")
 }

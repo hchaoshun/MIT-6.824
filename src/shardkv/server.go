@@ -26,14 +26,7 @@ func init() {
 	labgob.Register(MigrationData{})
 	labgob.Register(shardmaster.Config{})
 
-
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-}
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
 }
 
 type NotifyMsg struct {
@@ -122,14 +115,18 @@ func(kv *ShardKV) snapshotIfNeed(lastCommandIndex int) {
 	}
 }
 
-func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
-	DPrintf("this1")
+func (kv *ShardKV) getConfigNum() int {
 	kv.Lock()
 	defer kv.Unlock()
-	DPrintf("this2")
+	return kv.config.Num
+}
+
+func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
+	kv.Lock()
+	defer kv.Unlock()
 	//client 的confignum于server的不一致
 	if configNum != kv.config.Num {
-		DPrintf("server wrong group. client: %v, server: %v", configNum, kv.config.Num)
+		DPrintf("server wrong group.command: %v client: %v, server: %v",command, configNum, kv.config.Num)
 		return ErrWrongGroup, ""
 	}
 
@@ -147,7 +144,7 @@ func (kv *ShardKV) Start(configNum int, command interface{}) (Err, string) {
 	select {
 	case msg := <-notifyCh:
 		kv.Lock()
-		DPrintf("%v wait notifyCh.", msg)
+		DPrintf("server %v wait notifyCh.", msg)
 		if msg.Term != term {
 			return ErrWrongLeader, ""
 		} else {
@@ -166,8 +163,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	DPrintf("put %v, %v", args.Key, args.Value)
-	DPrintf("server config: %v", kv.config)
+	DPrintf("server put args: %v", args)
 	reply.Err, _ = kv.Start(args.ConfigNum, args.Copy())
 }
 
@@ -220,7 +216,7 @@ func (kv *ShardKV) ShardClean(args *ShardCleanArgs, reply *ShardCleanReply) {
 
 //Leader定时向shardmaster获取最新config
 func (kv *ShardKV) poll() {
-	DPrintf("start poll job.")
+	//DPrintf("start poll job.")
 	kv.Lock()
 	defer kv.pollTimer.Reset(PollInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader {
@@ -235,12 +231,12 @@ func (kv *ShardKV) poll() {
 	if newConfig.Num == nextConfigNum {
 		kv.rf.Start(newConfig)
 	}
-	DPrintf("poll job finish.")
+	//DPrintf("poll job finish all.")
 }
 
 //Leader作为client向server发出请求拉server数据
 func (kv *ShardKV) pull() {
-	DPrintf("start pull job.")
+	//DPrintf("start pull job.")
 	kv.Lock()
 	defer kv.pullTimer.Reset(PullInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.waitingShards) == 0 {
@@ -262,7 +258,7 @@ func (kv *ShardKV) pull() {
 		<-ch
 		count--
 	}
-	DPrintf("pull job finish")
+	//DPrintf("pull job finish")
 }
 
 func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
@@ -276,7 +272,8 @@ func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 			//只要有一个server成功执行就返回，不必关注server是否是leader
 			if ok && reply.Err == OK {
 				//拉回来的数据要同步到follower
-				kv.Start(oldConfig.Num, reply)
+				//注意：start参数confignum必须与server的confignum保持一致
+				kv.Start(kv.getConfigNum(), reply)
 				return
 			}
 		}
@@ -286,7 +283,7 @@ func (kv *ShardKV) doPull(shard int, oldConfig shardmaster.Config) {
 
 //此操作发生在client已经把数据拉回成功之后，client向server发出clean rpc请求，通知server删除迁移后的shard
 func (kv *ShardKV) clean() {
-	DPrintf("start clean job.")
+	//DPrintf("start clean job.")
 	kv.Lock()
 	defer kv.cleanTimer.Reset(cleanInterval)
 	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.cleaningShards) == 0 {
@@ -305,11 +302,12 @@ func (kv *ShardKV) clean() {
 			count++
 		}
 	}
+	kv.Unlock()
 	for count > 0 {
 		<-ch
 		count--
 	}
-	DPrintf("clean job finish.")
+	//DPrintf("clean job finish.")
 }
 
 func (kv *ShardKV) doClean(shard int, oldConfig shardmaster.Config) {
@@ -322,7 +320,6 @@ func (kv *ShardKV) doClean(shard int, oldConfig shardmaster.Config) {
 			ok := srv.Call("ShardKV.ShardClean", &args, &reply)
 			//只有srv是leader才会成功
 			if ok && reply.Err == OK {
-				//todo 不会发生死锁?
 				kv.Lock()
 				delete(kv.cleaningShards[oldConfig.Num], shard)
 				if len(kv.cleaningShards[oldConfig.Num]) == 0 {
@@ -477,7 +474,7 @@ func(kv *ShardKV) run() {
 					kv.readSnapshot()
 				//todo 放在这儿启动是否合适?
 				} else if cmd == "ReplayDone" {
-					kv.tick()
+					go kv.tick()
 				}
 				//todo newleader?
 			}
@@ -496,10 +493,6 @@ func (kv *ShardKV) Kill() {
 
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int,
 	gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
-	// call labgob.Register on structures you want
-	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
-
 	kv := new(ShardKV)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
