@@ -163,7 +163,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	DPrintf("server put args: %v", args)
+	DPrintf("test put key: %v, ownshard: %v confignum: %v", args.Key, kv.ownShards, kv.config.Num)
 	reply.Err, _ = kv.Start(args.ConfigNum, args.Copy())
 }
 
@@ -351,7 +351,8 @@ func (kv *ShardKV) appendNewConfig(newConfig shardmaster.Config) {
 
 	for shard, gid := range newConfig.Shards {
 		if gid == kv.gid {
-			if _, ok := oldOwnShards[shard]; ok {
+			//注意：初始化时kv.ownShards什么也没有，此时需要将新join的gid全部加入
+			if _, ok := oldOwnShards[shard]; ok || oldConfig.Num == 0{
 				kv.ownShards[shard] = struct{}{}
 				//删除完最后剩下的是已经被其他gid替换的，此时需要迁移走
 				delete(oldOwnShards, shard)
@@ -399,8 +400,10 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 	} else if arg, ok := msg.Command.(PutAppendArgs); ok {
 		shard := key2shard(arg.Key)
 		if _, ok := kv.ownShards[shard]; !ok {
+			DPrintf("server kv.ownShards %v not shard %v", kv.ownShards, shard)
 			result.Err = ErrWrongGroup
 		} else if arg.ConfigNum != kv.config.Num {
+			DPrintf("server arg.ConfigNum %v != kv.config.Num %v", arg.ConfigNum, kv.config.Num)
 			result.Err = ErrWrongGroup
 		} else if _, ok := kv.cache[arg.RequestId]; !ok {
 			if arg.Op == "Put" {

@@ -114,6 +114,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		//注意：第二次循环以后config更新，confignum也随着更新
+		args.ConfigNum = ck.config.Num
 		DPrintf("client args.ConfigNum: %v", args.ConfigNum)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
