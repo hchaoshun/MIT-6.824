@@ -176,12 +176,11 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		//此时rf.lastIncludedIndex+1(17) < rf.logIndex(18)
 		rf.commitIndex = Max(rf.commitIndex, rf.lastIncludedIndex)
 		rf.logIndex = Max(rf.logIndex, rf.lastIncludedIndex+1)
-		//正常情况下truncationStartIndex 应该>=len(rf.log),小于则说明truncationStartIndex以后的日志都是最近加入的
+		//正常情况下truncationStartIndex 应该=len(rf.log),小于则说明truncationStartIndex以后的日志都是最近加入的
 		//DPrintf("InstallSnapshot. before log: %v", rf.Log)
 		if truncationStartIndex < len(rf.log) {
 			rf.log = rf.log[truncationStartIndex:]
 		} else {
-			//todo
 			//rf.Log = []LogEntry{{0, nil, 0}}
 			rf.log = []LogEntry{{args.LastIncludedIndex, nil, args.LastIncludedTerm}}
 		}

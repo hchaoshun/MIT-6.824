@@ -25,11 +25,11 @@ type Raft struct {
 	currentTerm		 	int
 	logIndex			int //index of next log entry to be stored, initialized to 1
 	votedFor 			int
-	log  				[]LogEntry
+	log  				[]LogEntry //log数组第一个index 0 未使用
 
 	commitIndex			int
 	lastApplied			int
-	lastIncludedIndex 	int //snapshot最后的index， 初始化为0
+	lastIncludedIndex 	int //snapshot后log的第一个index索引
 
 	//每次选举成功nextIndex都重新初始化为logIndex，所以Leader的nextIndex总是>=follower的logIndex
 	//正常情况下matchIndex 应等于nextIndex - 1
@@ -195,7 +195,8 @@ func (rf *Raft) PersistAndSaveSnapshot(lastCommandIndex int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if lastCommandIndex > rf.lastIncludedIndex {
-		//truncationStartIndex总是等于快照log的长度
+		//rf.getOffsetIndex(lastCommandIndex)正常情况下是log数组最后一个元素index减去第一个元素index
+		//truncationStartIndex总是等于快照log的长度,两个lastCommandIndex之间的长度是快照log的长度
 		truncationStartIndex := rf.getOffsetIndex(lastCommandIndex)
 		//DPrintf("leader: before log: %v", rf.Log)
 		//snapshot后log第一条日志的index应总是等于lastIncludedIndex
@@ -218,6 +219,8 @@ func (rf *Raft) sendSnapshot(follower int) {
 		return
 	}
 
+	//data是在kv层序列化后的kv数据
+	//各个follower也需要持久化raft state和snapshot,raft state 各个follower自己get，snapshot由此参数传递
 	args := InstallSnapshotArgs{Term:rf.currentTerm, LeaderId:rf.me, LastIncludedIndex:rf.lastIncludedIndex,
 		LastIncludedTerm:rf.getEntry(rf.lastIncludedIndex).LogTerm, Data:rf.persister.ReadSnapshot()}
 	rf.mu.Unlock()
