@@ -185,6 +185,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			rf.log = []LogEntry{{args.LastIncludedIndex, nil, args.LastIncludedTerm}}
 		}
 		//DPrintf("InstallSnapshot. after log: %v", rf.Log)
+		//持久化raft state和snapshot过程
 		rf.persister.SaveStateAndSnapshot(rf.getPersistState(), args.Data)
 		if oldCommitIndex < rf.commitIndex {
 			rf.notifyApplyCh <- struct{}{}

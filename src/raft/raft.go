@@ -15,31 +15,34 @@ const ElectionTimeout = time.Duration(1000 * time.Millisecond)
 
 
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
+	mu        			sync.Mutex          // Lock to protect shared access to this peer's state
+	peers    			[]*labrpc.ClientEnd // RPC end points of all peers
+	persister 			*Persister          // Object to hold this peer's persisted state
+	me        			int                 // this peer's index into peers[]
 
-	leaderId 		int
-	state 				serverState
+
 	currentTerm		 	int
-	logIndex			int //index of next log entry to be stored, initialized to 1
 	votedFor 			int
 	log  				[]LogEntry //log数组第一个index 0 未使用
 
-	commitIndex			int
+	commitIndex			int //没有获得majority认同，commitIndex不会更新
 	lastApplied			int
-	lastIncludedIndex 	int //snapshot后log的第一个index索引
 
 	//每次选举成功nextIndex都重新初始化为logIndex，所以Leader的nextIndex总是>=follower的logIndex
+	//leader每次appendentry成功后都会更新
 	//正常情况下matchIndex 应等于nextIndex - 1
-	nextIndex		[]int
-	matchIndex		[]int
-	applyCh			chan ApplyMsg
-	notifyApplyCh	chan struct{} //更新commitIndex时chan写入
-	shutdown		chan struct{}
-	electionTimer	*time.Timer
-	TestFlag		bool
+	nextIndex			[]int
+	matchIndex			[]int
+
+	leaderId 			int
+	logIndex			int //index of next log entry to be stored, initialized to 1
+	state 				serverState
+	lastIncludedIndex 	int //snapshot后log的第一个index索引
+	applyCh				chan ApplyMsg
+	notifyApplyCh		chan struct{} //更新commitIndex时chan写入
+	shutdown			chan struct{}
+	electionTimer		*time.Timer
+	TestFlag			bool
 }
 
 func newRandDuration(minDuration time.Duration) time.Duration {
@@ -257,7 +260,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 		return
 	}
 
-	//follower的nextIndex之前的log已经leader被丢弃.正常情况下不会发生，网络异常或新节点加入才会发生
+	//条件成立说明kv已经snapshot，更新了lastIncludedIndex信息
 	if rf.nextIndex[follower] <= rf.lastIncludedIndex {
 		//if rf.TestFlag {
 		//	DPrintf("trigger InstallSnapshot, follower: %v, nextIndex: %v," +
@@ -313,7 +316,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 				rf.matchIndex[follower] = commitIndex
 			}
 
-			//必须要majority之后才能提交
+			//必须要majority之后才能提交,也就是发送多次后matchIndex达到majority条件才会成立
 			//日志为空时条件不会成立
 			if rf.canCommit(commitIndex) {
 				rf.commitIndex = commitIndex
@@ -327,6 +330,7 @@ func (rf *Raft) sendLogEntry(follower int) {
 	//DPrintf("me: %v, leader: %v", rf.me, rf.currentLeader)
 }
 
+//majority承认返回true
 func (rf *Raft) canCommit(index int) bool {
 	if index < rf.logIndex && index > rf.commitIndex && rf.getEntry(index).LogTerm == rf.currentTerm {
 		majorities, count := len(rf.peers) / 2 + 1, 0
@@ -479,7 +483,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//	DPrintf("Start command: %v", command)
 	//}
 	//DPrintf("follower rf: %v", *rf)
-	//即使通过此条件rf.me也不一定是leader，可能是上一个term的leader，由于partition已经有新的leader产生，
+	//注意：即使通过此条件rf.me也不一定是leader，可能是上一个term的leader，由于partition已经有新的leader产生，
 	//此时rf.currentTerm小于leader的term
 	if rf.state != Leader {
 		//DPrintf("raft: sorry, %v is not leader, leader: %v", rf.me, rf.currentLeader)

@@ -13,8 +13,8 @@ import "sync"
 
 type Persister struct {
 	mu        sync.Mutex
-	raftstate []byte
-	snapshot  []byte
+	raftstate []byte //存储raft协议的序列化信息
+	snapshot  []byte //存储kv数据的序列化信息
 }
 
 func MakePersister() *Persister {

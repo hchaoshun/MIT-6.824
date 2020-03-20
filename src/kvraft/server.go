@@ -18,7 +18,6 @@ func init() {
 }
 
 type Op struct {
-
 }
 
 type NotifyMsg struct {
@@ -42,6 +41,7 @@ type KVServer struct {
 	notifyChanMap 	map[int]chan NotifyMsg // map的key是applyCh返回的CommandIndex
 }
 
+//snapshot 目的是为了防止raft里的log过大
 func (kv *KVServer) snapshot(lastCommandIndex int) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -86,6 +86,8 @@ func (kv *KVServer) notifyIfPresent(index int, reply NotifyMsg) {
 func (kv *KVServer) Start(command interface{}) (Err, string) {
 	//立即返回
 	index, term, ok := kv.rf.Start(command)
+	//注意：即使通过此条件rf.me也不一定是leader，可能是上一个term的leader，由于partition已经有新的leader产生，
+	//此时rf.currentTerm小于leader的term
 	if !ok {
 		return ErrWrongLeader, ""
 	}
@@ -170,6 +172,7 @@ func(kv *KVServer) run() {
 			DPrintf("%v applyCh received %v", kv.me, msg)
 			if msg.CommandValid {
 				DPrintf("call apply. commandIndex: %v", msg.CommandIndex)
+				//此msg一定是raft majority承认后的消息
 				kv.apply(msg)
 			} else if cmd, ok := msg.Command.(string); ok {
 				if cmd == "InstallSnapshot" {

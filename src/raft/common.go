@@ -31,7 +31,7 @@ func Max(a, b int) int {
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
-	//必须带term，可能由于partition，发送到管道的term可能大于start后收到的term
+	//注意：必须带term，可能由于partition，发送到管道的term可能大于start后收到的term
 	CommandTerm	 int
 	CommandIndex int
 }
@@ -76,7 +76,7 @@ type AppendEntriesArgs struct {
 	PrevLogIndex	int
 	PrevLogTerm		int
 	Entries 		[]LogEntry
-	CommitIndex		int
+	CommitIndex		int //此参数更新follower的commitIndex，必要时apply
 	//LeaderCommit		int
 	Len 			int
 }

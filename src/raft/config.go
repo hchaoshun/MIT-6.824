@@ -57,6 +57,7 @@ type config struct {
 
 var ncpu_once sync.Once
 
+//启动raft的准备工作
 func make_config(t *testing.T, n int, unreliable bool) *config {
 	ncpu_once.Do(func() {
 		if runtime.NumCPU() < 2 {
@@ -133,6 +134,7 @@ func (cfg *config) crash1(i int) {
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
 //
+//启动raft，并准备读raft返回的apply，检查是否正确
 func (cfg *config) start1(i int) {
 	cfg.crash1(i)
 
@@ -166,6 +168,7 @@ func (cfg *config) start1(i int) {
 
 	// listen to messages from Raft indicating newly committed messages.
 	applyCh := make(chan ApplyMsg)
+	//这个协程读raft返回的apply，并检查是否正确
 	go func() {
 		for m := range applyCh {
 			err_msg := ""
@@ -180,6 +183,7 @@ func (cfg *config) start1(i int) {
 							m.CommandIndex, i, m.Command, j, old)
 					}
 				}
+				//prevok == false表示commandindex乱序到达
 				_, prevok := cfg.logs[i][m.CommandIndex-1]
 				cfg.logs[i][m.CommandIndex] = v
 				if m.CommandIndex > cfg.maxIndex {
@@ -222,6 +226,7 @@ func (cfg *config) checkTimeout() {
 	}
 }
 
+//kill 每一个raft
 func (cfg *config) cleanup() {
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.rafts[i] != nil {
