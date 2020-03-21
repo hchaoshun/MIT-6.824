@@ -24,11 +24,11 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 const (
-	OK            = "OK"
-	ErrNoKey      = "ErrNoKey"
-	ErrWrongGroup = "ErrWrongGroup" // todo client和server如何处理此错误？
-	ErrWrongLeader = "ErrWrongLeader"
-	ErrTimeout = "ErrTimeout"
+	OK            		= "OK"
+	ErrNoKey      		= "ErrNoKey"
+	ErrWrongGroup 		= "ErrWrongGroup"
+	ErrWrongLeader 		= "ErrWrongLeader"
+	ErrTimeout 			= "ErrTimeout"
 )
 
 const PollInterval = time.Duration(200 * time.Millisecond)

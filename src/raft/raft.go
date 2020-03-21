@@ -475,6 +475,10 @@ func (rf *Raft) apply() {
 	}
 }
 
+//command 的参数可以是：
+//GetArgs、PutAppendArgs
+//JoinArgs、LeaveArgs、MoveArgs、QueryArgs
+//GetArgs、PutAppendArgs、Config、ShardMigrationReply、ShardCleanReply
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()

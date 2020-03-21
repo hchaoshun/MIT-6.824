@@ -24,7 +24,7 @@ type Op struct {
 
 type NotifyArg struct {
 	Term		int
-	Value		interface{} //Query将config传给value
+	Value		interface{} //value返回的是config，这与kvraft不同
 	Err 		Err
 }
 
@@ -100,6 +100,7 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 	reply.Err, _ = sm.start(args.Copy())
 }
 
+//参数args的num如果在configs范围内直接获取返回，如果不在表示最新，需要通过raft同步到各个节点然后再返回
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	sm.Lock()
 	if args.Num > 0 && args.Num < len(sm.configs) {

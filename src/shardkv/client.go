@@ -37,10 +37,10 @@ func nrand() int64 {
 
 //client 和 server 都存储最近的config，client发送到server时需要比较config里的num是否一致
 type Clerk struct {
-	sm       		*shardmaster.Clerk //shardmaster 的client端
-	config   		shardmaster.Config
-	make_end 		func(string) *labrpc.ClientEnd
-	clientId		int64
+	sm       			*shardmaster.Clerk //shardmaster 的client端
+	config   			shardmaster.Config
+	make_end 			func(string) *labrpc.ClientEnd
+	clientId			int64
 	lastRequestId		int64
 }
 

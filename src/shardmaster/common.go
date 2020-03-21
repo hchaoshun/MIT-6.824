@@ -30,7 +30,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 
 
 // The number of shards.
-//shard数量固定，类似于一致性hash算法
+//shard数量固定，一致性hash算法
 const NShards = 10
 
 //不同shard值gid可能相同，让gid均匀分布在shards数组中，gid的数量差 < 2

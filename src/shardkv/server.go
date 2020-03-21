@@ -167,8 +167,9 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err, _ = kv.Start(args.ConfigNum, args.Copy())
 }
 
-//server端无法判断迁移是否成功，所以此rpc不用同步到各节点
+//注意：server端无法判断迁移是否成功，所以此rpc不用同步到各节点
 //client端迁移成功后会发出clean操作通知server删除已迁移的shard
+//类似于tcp三次握手
 //此调用是一个普通的rpc调用，不需要raft同步各节点
 func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigrationReply) {
 	kv.Lock()
@@ -195,6 +196,7 @@ func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigratio
 
 }
 
+//注意server的rpc调用函数并不会改变协议状态
 func (kv *ShardKV) ShardClean(args *ShardCleanArgs, reply *ShardCleanReply) {
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongGroup
@@ -418,6 +420,7 @@ func (kv *ShardKV) apply(msg raft.ApplyMsg) {
 		kv.appendNewConfig(arg)
 	} else if arg, ok := msg.Command.(ShardMigrationReply); ok {
 		//用于迁移的configNum应该刚好是新的configNum的前一个
+		//将waitingShards里的shard删除，然后加入ownShards和cleaningShards
 		if arg.ConfigNum == kv.config.Num - 1 {
 			delete(kv.waitingShards, arg.Shard)
 			//todo 是否一定不在ownShards里？
